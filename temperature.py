@@ -16,7 +16,7 @@ time_image.rotate(90)
 time_draw = ImageDraw.Draw(time_image)
 epd.displayPartBaseImage(epd.getbuffer(time_image))
 while (True):
-	time_draw.rectangle((120, 80, 220, 105), fill = 0)
+	time_draw.rectangle((20, 20, 100, 44), fill = 0)
 	time_draw.text((20, 20), time.strftime('%H:%M'), font = font24, fill = 0)
 	epd.displayPartial(epd.getbuffer(time_image))
 
