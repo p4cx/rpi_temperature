@@ -1,10 +1,12 @@
 
 # $HOME/.config/systemd/user/run_rpi_temperature.service
 [Unit]
-Description=Run rpi_temperature project
-After=update_rpi_temperature.service
+Description=Update and run rpi_temperature project
 
 [Service]
+WorkingDirectory=%h/rpi_temperature
+ExecStartPre=/usr/bin/git reset --hard master
+ExecStartPre=/usr/bin/git pull
 ExecStart=%h/rpi_temperature/venv/bin/python3 %h/rpi_temperature/temperature.py
 
 [Install]
