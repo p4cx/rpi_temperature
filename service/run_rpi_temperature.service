@@ -8,4 +8,4 @@ After=update_rpi_temperature.service
 ExecStart=%h/rpi_temperature/venv/bin/python3 %h/rpi_temperature/temperature.py
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
