@@ -75,3 +75,8 @@ Setup service to have the code automatically updated on each startup and the pyt
 sudo cp ./service/update_rpi_temperature.service /etc/systemd/user/
 
 
+
+
+The FontStruction “Boxy Bold” (https://fontstruct.com/fontstructions/show/855993) by “william.thompsonj” is licensed under a Creative Commons Attribution license (http://creativecommons.org/licenses/by/3.0/).
+[ancestry]
+
