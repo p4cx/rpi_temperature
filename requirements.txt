@@ -1,0 +1,4 @@
+pillow==11.1.0
+RPi.GPIO==0.7.1
+spidev==3.6
+waveshare-epaper==1.3.0
