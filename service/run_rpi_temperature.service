@@ -4,6 +4,7 @@
 Description=Update and run rpi_temperature project
 
 [Service]
+ExecStartPre=nm-online
 WorkingDirectory=%h/rpi_temperature
 ExecStartPre=/usr/bin/git reset --hard master
 ExecStartPre=/usr/bin/git pull
