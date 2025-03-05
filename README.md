@@ -80,3 +80,5 @@ sudo cp ./service/update_rpi_temperature.service /etc/systemd/user/
 The FontStruction “Boxy Bold” (https://fontstruct.com/fontstructions/show/855993) by “william.thompsonj” is licensed under a Creative Commons Attribution license (http://creativecommons.org/licenses/by/3.0/).
 [ancestry]
 
+https://www.1001fonts.com/karmatic-arcade-font.html#license
+
