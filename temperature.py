@@ -5,7 +5,7 @@ import epaper
 import time
 from PIL import Image,ImageDraw,ImageFont
 
-font24 = ImageFont.truetype("./res/boxy-bold.ttf", 24)
+font24 = ImageFont.truetype("./res/karmatic-arcade.regular.ttf", 20)
 
 epd = epaper.epaper('epd2in13_V4').EPD()
 epd.init()
