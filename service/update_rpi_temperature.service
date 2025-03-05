@@ -1,0 +1,11 @@
+# $HOME/.config/systemd/user/update_rpi_temperature.service
+[Unit]
+Description=Update rpi_temperature project
+
+[Unit]
+Type=oneshot
+ExecStart=/usr/bin/git -C %h/rpi_temperature reset --hard main
+ExecStart=/usr/bin/git -C %h/rpi_temperature pull
+
+[Install]
+WantedBy=default.target
