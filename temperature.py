@@ -8,7 +8,6 @@ from PIL import Image,ImageDraw,ImageFont
 font24 = ImageFont.truetype("ls /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 24)
 
 epd = epaper.epaper('epd2in13_V4').EPD()
-logging.info("init and Clear")
 epd.init()
 epd.clear(0xFF)
 
