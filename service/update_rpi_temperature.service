@@ -2,10 +2,11 @@
 [Unit]
 Description=Update rpi_temperature project
 
-[Unit]
+[Service]
 Type=oneshot
-ExecStart=/usr/bin/git -C %h/rpi_temperature reset --hard main
-ExecStart=/usr/bin/git -C %h/rpi_temperature pull
+WorkingDirectory=%h/rpi_temperature
+ExecStart=/usr/bin/git reset --hard
+ExecStart=/usr/bin/git pull
 
 [Install]
 WantedBy=default.target

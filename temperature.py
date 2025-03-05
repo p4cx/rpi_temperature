@@ -9,7 +9,7 @@ font24 = ImageFont.truetype("ls /usr/share/fonts/truetype/dejavu/DejaVuSansMono.
 
 epd = epaper.epaper('epd2in13_V4').EPD()
 epd.init()
-epd.clear(0xFF)
+epd.Clear(0xFF)
 
 time_image = Image.new('1', (epd.width, epd.height), 255)
 time_image.rotate(90)

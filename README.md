@@ -72,3 +72,6 @@ waveshare-epaper==1.3.0
 
 Setup service to have the code automatically updated on each startup and the python program started afterwards
 
+sudo cp ./service/update_rpi_temperature.service /etc/systemd/user/
+
+
