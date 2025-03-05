@@ -5,7 +5,7 @@ Description=Update rpi_temperature project
 [Service]
 Type=oneshot
 WorkingDirectory=%h/rpi_temperature
-ExecStart=/usr/bin/git reset --hard
+ExecStart=/usr/bin/git reset --hard master
 ExecStart=/usr/bin/git pull
 
 [Install]
