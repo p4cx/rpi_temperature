@@ -45,9 +45,6 @@ while (True):
 	hello = font.getlength(string_var)
 	time_draw.text(((122-hello)/2, 7), string_var, font=font, fill = 255, align="center")
 	draw_temp_box(time_draw, pos_y=59, height=45)
-	draw_temp_box(time_draw, pos_y=108, height=45)
-	draw_temp_box(time_draw, pos_y=157, height=45)
-	draw_temp_box(time_draw, pos_y=206, height=45)
 	epd.display(epd.getbuffer(time_image))
 	break
 
