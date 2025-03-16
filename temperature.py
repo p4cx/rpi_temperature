@@ -39,12 +39,15 @@ def draw_temp_box(image_draw, pos_y, height):
 time_image = Image.new('1', (122, 255), 255)
 time_image.rotate(90)
 time_draw = ImageDraw.Draw(time_image)
-while (True):
-	time_draw.rectangle((0, 0, 122, 55), fill = 0)
-	string_var=time.strftime('%H:%M')
-	hello = font.getlength(string_var)
-	time_draw.text(((122-hello)/2, 7), string_var, font=font, fill = 255, align="center")
-	draw_temp_box(time_draw, pos_y=59, height=45)
-	epd.display(epd.getbuffer(time_image))
-	break
+time_draw.rectangle((0, 0, 122, 55), fill = 0)
+string_var=time.strftime('%H:%M')
+hello = font.getlength(string_var)
+time_draw.text(((122-hello)/2, 7), string_var, font=font, fill = 255, align="center")
+# draw_temp_box(time_draw, pos_y=59, height=45)
+# draw_temp_box(time_draw, pos_y=108, height=45)
+# draw_temp_box(time_draw, pos_y=157, height=45)
+# draw_temp_box(time_draw, pos_y=206, height=45)
+epd.display(epd.getbuffer(time_image))
+epd.sleep()
+
 
