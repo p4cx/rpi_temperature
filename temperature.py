@@ -49,6 +49,5 @@ while (True):
 	draw_temp_box(time_draw, pos_y=157, height=45)
 	draw_temp_box(time_draw, pos_y=206, height=45)
 	epd.display(epd.getbuffer(time_image))
-	epd.sleep()
 	break
 
