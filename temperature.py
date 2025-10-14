@@ -63,32 +63,32 @@ else:
 	epd.init()
 	epd.Clear(0xFF)
 
-def draw_battery(draw, x, y, level, w=28, h=12):
-	"""Draw a small horizontal battery at (x,y). level: 0..4 filled segments."""
-	# battery body
-	draw.rectangle((x, y, x + w, y + h), outline=0, fill=255)
-	# battery nub
-	nub_w = 3
-	nub_h = h // 2
-	draw.rectangle((x + w, y + (h - nub_h) // 2, x + w + nub_w, y + (h + nub_h) // 2), outline=0, fill=255)
-	# segments
-	segs = 4
-	inner_x = x + 2
-	inner_y = y + 2
-	inner_w = w - 4
-	inner_h = h - 4
-	seg_w = inner_w / segs
-	for i in range(segs):
-		sx = inner_x + i * seg_w
-		ex = sx + seg_w - 2
-		if i < level:
-			draw.rectangle((sx, inner_y, ex, inner_y + inner_h), outline=0, fill=0)
+def draw_battery(draw, x, y, level, w=100, h=6, padding=2):
+	"""Draw a horizontal loading-bar style battery at (x,y) with width w and height h.
+	level: 0..4 meaning 0%,25%,50%,75%,100% - we fill fraction = level/4. Glued to top inner border by caller.
+	x,y correspond to the left-top of the bar area."""
+	# Accept either percentage (0..100) or legacy level (0..4)
+	fill_pct = 0
+	try:
+		lvl = float(level)
+		if lvl <= 4:
+			# legacy mode: map 0..4 to 0..100
+			fill_pct = int((lvl / 4.0) * 100)
 		else:
-			draw.rectangle((sx, inner_y, ex, inner_y + inner_h), outline=0, fill=255)
+			# assume it's already a percent value
+			fill_pct = int(max(0, min(100, lvl)))
+	except Exception:
+		fill_pct = 0
+	inner_w = w - 2 * padding
+	fill_w = int(inner_w * (fill_pct / 100.0))
+	# do not draw outer frame; render only the filled portion so the bar looks like a loading strip
+	if fill_w > 0:
+		draw.rectangle((x + padding, y + (h - (h - padding))//2, x + padding + fill_w, y + h - (h - padding)//2), outline=0, fill=0)
 
 
 def draw_temp_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=None, battery_level=0):
-	pos_x = 4
+	# make boxes use full width of epaper (no extra side margins)
+	pos_x = 0
 	width = epaper_size[0]
 	cut = 10
 	border = 4
@@ -109,39 +109,95 @@ def draw_temp_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidi
 		(pos_x + border, pos_y + height - border)
 		), fill=255)
 
-	# If sensor values provided, draw them
-	content_left = pos_x + 8
-	content_top = pos_y + 4
-	# room name
+	# If sensor values provided, draw them with updated layout per feedback
+	# compute inner content area (respect border)
+	inner_left = pos_x + border - 1
+	inner_right = pos_x + width - border + 1
+	inner_width = inner_right - inner_left
+	# Room letter: align to the left side of the right block with some inset from inner_right
+	right_block_margin = 22
+	label_x = inner_right - right_block_margin
+	label_y = pos_y + 6
 	if room_name is not None:
-		image_draw.text((content_left, content_top), str(room_name), font=small_font, fill=0)
+		# single letter (first char)
+		rn = str(room_name).strip()
+		if len(rn) > 0:
+			rn = rn[0].upper()
+		else:
+			rn = '?'
+		image_draw.text((label_x, label_y), rn, font=small_font, fill=0)
 
-	# humidity and battery on the left-bottom
-	if humidity is not None:
-		hum_text = f"{int(humidity)}%"
-		# place humidity under room name
-		image_draw.text((content_left, pos_y + height - 18), hum_text, font=small_font, fill=0)
-
+	# Top-right: battery drawn as up to 4 small square boxes on the top of the box
 	if battery_level is not None:
-		# draw battery to the right of humidity
-		bx = pos_x + 60
-		by = pos_y + height - 20
-		# clamp battery_level to 0..4
-		try:
-			bl = int(battery_level)
-		except Exception:
-			bl = 0
-		bl = max(0, min(4, bl))
-		draw_battery(image_draw, bx, by, bl)
+		# horizontal loading bar placed inside the box just below the top border
+		# height equals the border thickness and starts directly after the left black border
+		bar_h = border
+		bar_padding = 1
+		# start exactly at the inner left (touching the inner border)
+		bx = inner_left
+		# place just below the top black border (inside the white area)
+		by = pos_y + border
+		# width spans the inner area with minimal right margin
+		bar_w = inner_width - 2
+		draw_battery(image_draw, bx, by, battery_level, w=bar_w, h=bar_h, padding=bar_padding)
 
-	# temperature on the right, large
+	# Temperature: smaller than clock font and placed toward the left-middle of the top area
 	if temp_c is not None:
-		temp_text = f"{temp_c:.1f}°C"
-		# center vertically in the box, align right
-		t_w = font.getlength(temp_text)
-		tx = pos_x + (width - 2 * pos_x) - t_w - 8
-		ty = pos_y + (height - font.size) / 2
-		image_draw.text((tx, ty), temp_text, font=font, fill=0)
+		# use a slightly smaller font for the temperature (reduce size by ~6)
+		try:
+			temp_font = ImageFont.truetype("./res/monofonto.otf", max(12, font.size - 6))
+		except Exception:
+			temp_font = small_font
+		# build parts to control spacing: integer, dot, fraction, degree, C
+		temp_str = f"{temp_c:.1f}"
+		if '.' in temp_str:
+			left, right = temp_str.split('.')
+		else:
+			left, right = temp_str, ''
+		deg = '°'
+		unit = 'C'
+		# measure widths
+		left_w = temp_font.getlength(left)
+		dot_w = temp_font.getlength('.')
+		right_w = temp_font.getlength(right)
+		deg_w = temp_font.getlength(deg)
+		unit_w = temp_font.getlength(unit)
+		total_w = left_w + dot_w + right_w + deg_w + unit_w
+		# move temperature left a bit so it doesn't clash with the room letter on the right
+		tx_base = inner_left + int((inner_width - total_w) * 0.18)
+		ty = pos_y + 6 + 2  # move 2 px down for visual balance
+		# draw left part
+		x = tx_base
+		image_draw.text((x, ty), left, font=temp_font, fill=0)
+		x += left_w
+		# draw dot slightly left (overlap) to reduce gap
+		overlap_dot = 2
+		image_draw.text((x - overlap_dot, ty), '.', font=temp_font, fill=0)
+		x = x - overlap_dot + dot_w
+		# draw fraction with slight overlap
+		overlap_frac = 2
+		image_draw.text((x - overlap_frac, ty), right, font=temp_font, fill=0)
+		x = x - overlap_frac + right_w
+		# draw degree symbol with small left overlap
+		overlap_deg = 2
+		image_draw.text((x - overlap_deg, ty), deg, font=temp_font, fill=0)
+		x = x - overlap_deg + deg_w
+		# draw unit 'C' with small left overlap
+		overlap_unit = 1
+		image_draw.text((x - overlap_unit, ty), unit, font=temp_font, fill=0)
+
+	# Humidity: bottom-right inside the box
+	if humidity is not None:
+		# left-align humidity under the room letter with padding
+		hum_text = f"{int(humidity)}%"
+		hf_w = small_font.getlength(hum_text)
+		# ensure humidity text does not overflow into the right border
+		small_margin = 4
+		hx = label_x
+		if hx + hf_w > inner_right - small_margin:
+			hx = inner_right - small_margin - hf_w
+		hy = label_y + 18
+		image_draw.text((hx, hy), hum_text, font=small_font, fill=0)
 
 	return image_draw
 
@@ -157,10 +213,10 @@ time_draw.text(((122-hello)/2, 7), string_var, font=font, fill = 255, align="cen
 
 # Sample sensor data for four rooms. In real usage replace these with live readings.
 rooms = [
-	{"name": "Living", "temp": 21.3, "hum": 45, "bat": 4},
-	{"name": "Kitchen", "temp": 23.8, "hum": 50, "bat": 3},
-	{"name": "Bedroom", "temp": 19.6, "hum": 55, "bat": 2},
-	{"name": "Office", "temp": 20.1, "hum": 48, "bat": 1},
+	{"name": "Living", "temp": 21.3, "hum": 45, "bat": 97},
+	{"name": "Kitchen", "temp": 23.8, "hum": 50, "bat": 12},
+	{"name": "Bedroom", "temp": 19.6, "hum": 55, "bat": 35},
+	{"name": "Office", "temp": 20.1, "hum": 48, "bat": 67},
 ]
 
 box_y = 59
