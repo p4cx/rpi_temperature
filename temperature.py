@@ -7,7 +7,7 @@ from PIL import Image,ImageDraw,ImageFont
 
 debug = True
 font = ImageFont.truetype("./res/monofonto.otf", 35)
-epaper_size = (122, 255)
+epaper_size = (122, 250)
 
 epd = epaper.epaper('epd2in13_V4').EPD()
 epd.init()
