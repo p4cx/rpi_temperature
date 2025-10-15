@@ -549,20 +549,18 @@ def run_loop():
 					if changed:
 						# compute box position
 						box_y = 0
-						clock_h = 50
-						box_h = 45
 						y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
 						# create a partial image the same size as full screen but only draw the affected box
 						partial_image = Image.new('1', epaper_size, 255)
 						partial_drawer = ImageDraw.Draw(partial_image)
-						draw_box(partial_drawer, pos_y=y, height=box_h, room_name=r['name'], temp_c=r['temp'], humidity=r['hum'], battery_level=r['bat'])
+						draw_box(partial_drawer, pos_y=y, height=BOX_HEIGHT, room_name=r['name'], temp_c=r['temp'], humidity=r['hum'], battery_level=r['bat'])
 
 						# try hardware partial update methods if available
 						did_partial = False
 						try:
 							if hasattr(epd, 'display_partial'):
 								try:
-									epd.display_partial(epd.getbuffer(partial_image), x=0, y=y, w=epaper_size[0], h=box_h)
+									epd.display_partial(epd.getbuffer(partial_image), x=0, y=y, w=epaper_size[0], h=BOX_HEIGHT)
 									did_partial = True
 								except TypeError:
 									# some drivers accept only buffer
