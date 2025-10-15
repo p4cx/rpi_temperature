@@ -188,27 +188,19 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 						gb = None
 					if gb is not None:
 						try:
-							candidate = epd.getbuffer(region)
+							# Some drivers require a full-size image for getbuffer(); create a full image and paste region
+							full_buf_img = Image.new('1', epaper_size, 255)
+							full_buf_img.paste(region, (x, y))
+							candidate = epd.getbuffer(full_buf_img)
 							if isinstance(candidate, (bytes, bytearray)) and len(candidate) > 0:
 								used_buf = candidate
-								print("_send_partial: using epd.getbuffer(region) as buffer")
+								print("_send_partial: using epd.getbuffer(full_buf_img) as buffer, len=", len(candidate))
 						except Exception as e:
-							print("_send_partial: epd.getbuffer(region) failed:", e)
-					# try building a same-sized buffer and asking driver to format it
-					if used_buf is None and gb is not None:
-						try:
-							small_buf_img = Image.new('1', (rw, rh), 255)
-							small_buf_img.paste(region, (0, 0))
-							candidate = epd.getbuffer(small_buf_img)
-							if isinstance(candidate, (bytes, bytearray)) and len(candidate) > 0:
-								used_buf = candidate
-								print("_send_partial: using epd.getbuffer(small_buf_img) as buffer")
-						except Exception as e:
-							print("_send_partial: epd.getbuffer(small_buf_img) failed:", e)
+							print("_send_partial: epd.getbuffer(full_buf_img) failed:", e)
 					# fallback to raw bytes derived from pillow
 					if used_buf is None:
 						used_buf = bytes(buf)
-						print("_send_partial: using raw region.tobytes() as buffer")
+						print("_send_partial: using raw region.tobytes() as buffer, len=", len(used_buf))
 
 					# Some drivers expect inverted bits; try sending raw first, then inverted if behavior wrong.
 					try:
