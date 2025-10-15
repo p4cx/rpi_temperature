@@ -354,36 +354,75 @@ def run_loop():
 			]
 
 			if last_values['minute'] != cur_min:
-				# minute changed -> full render
-				full_image = Image.new('1', epaper_size, 255)
-				full_drawer = ImageDraw.Draw(full_image)
-				time_string = time.strftime('%H:%M')
-				box_y = 0
-				clock_h = 50
-				draw_box(full_drawer, pos_y=box_y, height=clock_h, clock_text=time_string)
-				box_h = 45
-				for i, room in enumerate(rooms):
-					y = box_y + clock_h + 6 + i * (box_h + 4)
-					draw_box(full_drawer, pos_y=y, height=box_h, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
-
-				# send full image
-				try:
-					if epaper is not None:
-						epd.init()
-						_send_to_epd(full_image)
-						epd.sleep()
-				except Exception:
+				# minute changed -> do minimal partial updates: clock + only changed room boxes
+				# If we don't have a last_full_image yet, render and send it fully once
+				if last_full_image is None:
+					full_image = Image.new('1', epaper_size, 255)
+					full_drawer = ImageDraw.Draw(full_image)
+					time_string = time.strftime('%H:%M')
+					box_y = 0
+					draw_box(full_drawer, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
+					for i, room in enumerate(rooms):
+						y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
+						draw_box(full_drawer, pos_y=y, height=BOX_HEIGHT, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
+					# send full image once (initialization)
 					try:
-						epd.display(epd.getbuffer(full_image))
-						epd.sleep()
+						if epaper is not None:
+							epd.init()
+							_send_to_epd(full_image)
+							epd.sleep()
+					except Exception:
+						try:
+							_send_to_epd(full_image)
+							epd.sleep()
+						except Exception:
+							pass
+					last_full_image = full_image.copy()
+					last_values['minute'] = cur_min
+					last_values['rooms'] = rooms
+					partial_update_counter = 0
+				else:
+					# partial-update the clock area
+					try:
+						box_y = 0
+						clock_partial = Image.new('1', epaper_size, 255)
+						clock_draw = ImageDraw.Draw(clock_partial)
+						time_string = time.strftime('%H:%M')
+						draw_box(clock_draw, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
+						if _send_partial(clock_partial, x=0, y=box_y, w=epaper_size[0], h=CLOCK_HEIGHT):
+							# composite onto stored full image
+							last_full_image.paste(clock_partial, (0, 0))
+							partial_update_counter += 1
 					except Exception:
 						pass
-
-				last_full_image = full_image.copy()
-				last_values['minute'] = cur_min
-				last_values['rooms'] = rooms
-				# reset partial counter on full refresh
-				partial_update_counter = 0
+					# partial-update only rooms that changed
+					for i, room in enumerate(rooms):
+						prev = last_values['rooms'][i] if i < len(last_values['rooms']) else None
+						room_changed = False
+						if prev is None:
+							room_changed = True
+						else:
+							if abs(prev.get('temp', 0) - room.get('temp', 0)) > 0.05:
+								room_changed = True
+							if prev.get('hum') != room.get('hum'):
+								room_changed = True
+							if prev.get('bat') != room.get('bat'):
+								room_changed = True
+						if room_changed:
+							try:
+								box_y = 0
+								y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
+								partial_image = Image.new('1', epaper_size, 255)
+								partial_drawer = ImageDraw.Draw(partial_image)
+								draw_box(partial_drawer, pos_y=y, height=BOX_HEIGHT, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
+								if _send_partial(partial_image, x=0, y=y, w=epaper_size[0], h=BOX_HEIGHT):
+									last_full_image.paste(partial_image, (0, 0))
+									partial_update_counter += 1
+							except Exception:
+								pass
+					# update stored values
+					last_values['minute'] = cur_min
+					last_values['rooms'] = rooms
 			else:
 				# minute didn't change -> check for per-room changes and send partial updates
 				# also attempt to update the clock area partially
