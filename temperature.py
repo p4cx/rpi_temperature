@@ -103,9 +103,25 @@ def _send_to_epd(pil_image):
 				print("_send_to_epd: falling back to epd.display(buf)")
 				epd.display(buf)
 				return True
-			except Exception:
-				print("_send_to_epd: epd.display(buf) failed")
-				return False
+			except Exception as e:
+				print("_send_to_epd: epd.display(buf) failed:", e)
+				import traceback
+				traceback.print_exc()
+				# try to re-init the driver and try again once
+				try:
+					epd.init()
+					print("_send_to_epd: epd.init() called after display failure, retrying display")
+					epd.display(buf)
+					return True
+				except Exception as e2:
+					print("_send_to_epd: retry epd.display after init failed:", e2)
+					traceback.print_exc()
+					# final fallback
+					try:
+						epd.display(pil_image)
+						return True
+					except Exception:
+						return False
 	except Exception:
 		# final fallback: try single-arg display with the original pil_image
 		try:
@@ -126,6 +142,13 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 			h = epaper_size[1]
 
 		# Prefer a low-level partial update using Waveshare methods if available
+		# Ensure driver is initialized before attempting low-level partial calls
+		try:
+			epd.init()
+			print("_send_partial: epd.init() called before partial")
+		except Exception as ie:
+			print("_send_partial: epd.init() failed:", ie)
+
 		if (all(hasattr(epd, name) for name in ('SetWindow', 'SetCursor', 'send_data2', 'TurnOnDisplayPart'))
 				or all(hasattr(epd, name) for name in ('set_windows', 'set_cursor', 'send_data2', 'ondisplay'))):
 			try:
@@ -177,11 +200,15 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 							print("_send_partial: epd.ondisplay failed:", e)
 					return True
 				except Exception as e:
+					import traceback
 					print("_send_partial: low-level window API failed:", e)
+					traceback.print_exc()
 					# fallthrough to other partial APIs
 					pass
 			except Exception as e:
+				import traceback
 				print("_send_partial: low-level partial failed:", e)
+				traceback.print_exc()
 				# fallthrough to other partial APIs
 				pass
 
