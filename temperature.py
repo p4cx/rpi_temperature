@@ -25,35 +25,35 @@ else:
 			print("DummyEPD.init()")
 		def Clear(self, v):
 			print(f"DummyEPD.Clear({v})")
-		def display(self, buf):
+		def display(self, buffer):
 			# for testing, save image buffer to file if it's a PIL Image or raw bytes
 			try:
 				from PIL import Image
 				import os
 				# ensure preview directory exists
 				os.makedirs('./res/preview', exist_ok=True)
-				if isinstance(buf, Image.Image):
-					img = buf
+				if isinstance(buffer, Image.Image):
+					image = buffer
 				else:
 					# try to interpret as raw bytes for a 1-bit image
 					try:
-						img = Image.frombytes('1', epaper_size, buf)
+						image = Image.frombytes('1', epaper_size, buffer)
 					except Exception:
-						img = None
-				if img is not None:
+						image = None
+				if image is not None:
 					fname = time.strftime('res/preview/preview_%Y%m%d_%H%M%S.png')
 					# convert to RGB so PNG viewers render correctly
-					img.convert('RGB').save(fname)
+					image.convert('RGB').save(fname)
 					print(f"DummyEPD.display() saved preview to {fname}")
 				else:
 					print("DummyEPD.display() called but could not create image from buffer")
 			except Exception as e:
 				print("DummyEPD.display() error:", e)
 			return
-		def getbuffer(self, image):
+		def getbuffer(self, pil_image):
 			# Return the PIL Image directly so display can save it for preview
 			try:
-				return image
+				return pil_image
 			except Exception:
 				return b''
 		def sleep(self):
@@ -86,12 +86,37 @@ def draw_battery(draw, x, y, level, w=100, h=6, padding=2):
 		draw.rectangle((x + padding, y + (h - (h - padding))//2, x + padding + fill_w, y + h - (h - padding)//2), outline=0, fill=0)
 
 
-def draw_temp_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=None, battery_level=0):
+def draw_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=None, battery_level=0, clock_text=None):
+	# unified box drawer: can render a temperature box or a clock box when clock_text is provided
 	# make boxes use full width of epaper (no extra side margins)
 	pos_x = 0
 	width = epaper_size[0]
 	cut = 10
 	border = 4
+	# if clock_text is provided, draw a full black box and center white text
+	if clock_text is not None:
+		image_draw.polygon((
+			(pos_x, pos_y),
+			(pos_x + (width - 2 * pos_x) - cut, pos_y),
+			(pos_x + (width - 2 * pos_x), pos_y + cut),
+			(pos_x + (width - 2 * pos_x), pos_y + height),
+			(pos_x, pos_y + height)
+			), fill=0)
+		# center clock text
+		font_to_use = font
+		try:
+			text_width = font_to_use.getlength(clock_text)
+			text_x = (width - text_width) / 2
+			# shift clock text slightly upward so it doesn't sit on the same horizontal band as the battery bar
+			preferred_y = pos_y + (height - font_to_use.size) / 2 - 6
+			# clamp so text stays inside the box
+			text_y = max(pos_y + 2, preferred_y)
+		except Exception:
+			text_x = pos_x + 8
+			text_y = pos_y + 4
+		image_draw.text((text_x, text_y), clock_text, font=font_to_use, fill=255)
+		return image_draw
+
 	# outer filled polygon (box background)
 	image_draw.polygon((
 		(pos_x, pos_y),
@@ -202,30 +227,198 @@ def draw_temp_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidi
 	return image_draw
 
 
+def draw_clock_box(image_draw, pos_y, height, text, font_obj=None):
+	"""Draw a full-black filled box (same shape as temp box) and center white text inside."""
+	pos_x = 0
+	width = epaper_size[0]
+	cut = 10
+	# draw outer filled polygon (completely black)
+	image_draw.polygon((
+		(pos_x, pos_y),
+		(pos_x + (width - 2 * pos_x) - cut, pos_y),
+		(pos_x + (width - 2 * pos_x), pos_y + cut),
+		(pos_x + (width - 2 * pos_x), pos_y + height),
+		(pos_x, pos_y + height)
+		), fill=0)
+	# center the text
+	f = font_obj or font
+	try:
+		txt_w = f.getlength(text)
+		tx = (width - txt_w) / 2
+		ty = pos_y + (height - f.size) / 2
+	except Exception:
+		tx = 8
+		ty = pos_y + 8
+	image_draw.text((tx, ty), text, font=f, fill=255)
+	return image_draw
 
-time_image = Image.new('1', (122, 250), 255)
-time_image.rotate(90)
-time_draw = ImageDraw.Draw(time_image)
-time_draw.rectangle((0, 0, 122, 55), fill = 0)
-string_var=time.strftime('%H:%M')
-hello = font.getlength(string_var)
-time_draw.text(((122-hello)/2, 7), string_var, font=font, fill = 255, align="center")
 
-# Sample sensor data for four rooms. In real usage replace these with live readings.
-rooms = [
-	{"name": "Living", "temp": 21.3, "hum": 45, "bat": 97},
-	{"name": "Kitchen", "temp": 23.8, "hum": 50, "bat": 12},
-	{"name": "Bedroom", "temp": 19.6, "hum": 55, "bat": 35},
-	{"name": "Office", "temp": 20.1, "hum": 48, "bat": 67},
-]
 
-box_y = 59
-box_h = 45
-for i, r in enumerate(rooms):
-	y = box_y + i * (box_h + 4)
-	draw_temp_box(time_draw, pos_y=y, height=box_h, room_name=r['name'], temp_c=r['temp'], humidity=r['hum'], battery_level=r['bat'])
+def render_once():
+	# Sample sensor data for four rooms. In real usage replace these with live readings.
+	rooms = [
+		{"name": "Living", "temp": 21.3, "hum": 45, "bat": 97},
+		{"name": "Kitchen", "temp": 23.8, "hum": 50, "bat": 12},
+		{"name": "Bedroom", "temp": 19.6, "hum": 55, "bat": 35},
+		{"name": "Office", "temp": 20.1, "hum": 48, "bat": 67},
+	]
 
-epd.display(epd.getbuffer(time_image))
-epd.sleep()
+	display_image = Image.new('1', epaper_size, 255)
+	# rotation is a no-op for the image object; we keep orientation consistent with earlier code
+	display_draw = ImageDraw.Draw(display_image)
+
+	time_string = time.strftime('%H:%M')
+
+	box_y = 0
+	# First draw clock box with height 50
+	clock_h = 50
+	draw_box(display_draw, pos_y=box_y, height=clock_h, clock_text=time_string)
+	# Draw four temp boxes below the clock box
+	box_h = 45
+	for i, r in enumerate(rooms):
+		y = box_y + clock_h + 6 + i * (box_h + 4)
+		draw_box(display_draw, pos_y=y, height=box_h, room_name=r['name'], temp_c=r['temp'], humidity=r['hum'], battery_level=r['bat'])
+
+	# send to epaper
+	try:
+		if epaper is not None:
+			epd.init()
+		epd.display(epd.getbuffer(display_image))
+		epd.sleep()
+	except Exception:
+		# Ensure dummy still tries to display
+		try:
+			epd.display(epd.getbuffer(display_image))
+			epd.sleep()
+		except Exception:
+			pass
+
+
+def run_loop():
+	# keep last rendered values for detecting changes
+	last_values = {
+		'minute': None,
+		'rooms': [],
+	}
+	last_full_image = None
+
+	poll_interval = 5.0  # seconds between checks
+	try:
+		while True:
+			now = time.time()
+			cur_min = time.strftime('%Y-%m-%d %H:%M', time.localtime(now))
+
+			# get current sensor data (replace this with real data retrieval)
+			rooms = [
+				{"name": "Living", "temp": 21.3, "hum": 45, "bat": 97},
+				{"name": "Kitchen", "temp": 23.8, "hum": 50, "bat": 12},
+				{"name": "Bedroom", "temp": 19.6, "hum": 55, "bat": 35},
+				{"name": "Office", "temp": 20.1, "hum": 48, "bat": 67},
+			]
+
+			if last_values['minute'] != cur_min:
+				# minute changed -> full render
+				full_image = Image.new('1', epaper_size, 255)
+				full_drawer = ImageDraw.Draw(full_image)
+				time_string = time.strftime('%H:%M')
+				box_y = 0
+				clock_h = 50
+				draw_box(full_drawer, pos_y=box_y, height=clock_h, clock_text=time_string)
+				box_h = 45
+				for i, room in enumerate(rooms):
+					y = box_y + clock_h + 6 + i * (box_h + 4)
+					draw_box(full_drawer, pos_y=y, height=box_h, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
+
+				# send full image
+				try:
+					if epaper is not None:
+						epd.init()
+					epd.display(epd.getbuffer(full_image))
+					epd.sleep()
+				except Exception:
+					try:
+						epd.display(epd.getbuffer(full_image))
+						epd.sleep()
+					except Exception:
+						pass
+
+				last_full_image = full_image.copy()
+				last_values['minute'] = cur_min
+				last_values['rooms'] = rooms
+			else:
+				# minute didn't change -> check for per-room changes and send partial updates
+				for i, r in enumerate(rooms):
+					prev = last_values['rooms'][i] if i < len(last_values['rooms']) else None
+					changed = False
+					if prev is None:
+						changed = True
+					else:
+						# compare relevant fields (temp, hum, bat)
+						if abs(prev.get('temp', 0) - r.get('temp', 0)) > 0.05:
+							changed = True
+						if prev.get('hum') != r.get('hum'):
+							changed = True
+						if prev.get('bat') != r.get('bat'):
+							changed = True
+					if changed:
+						# compute box position
+						box_y = 0
+						clock_h = 50
+						box_h = 45
+						y = box_y + clock_h + 6 + i * (box_h + 4)
+						# create a partial image the same size as full screen but only draw the affected box
+						partial_image = Image.new('1', epaper_size, 255)
+						partial_drawer = ImageDraw.Draw(partial_image)
+						draw_box(partial_drawer, pos_y=y, height=box_h, room_name=r['name'], temp_c=r['temp'], humidity=r['hum'], battery_level=r['bat'])
+
+						# try hardware partial update methods if available
+						did_partial = False
+						try:
+							if hasattr(epd, 'display_partial'):
+								try:
+									epd.display_partial(epd.getbuffer(partial_image), x=0, y=y, w=epaper_size[0], h=box_h)
+									did_partial = True
+								except TypeError:
+									# some drivers accept only buffer
+									epd.display_partial(epd.getbuffer(partial_image))
+									did_partial = True
+							elif hasattr(epd, 'displayPartial'):
+								epd.displayPartial(epd.getbuffer(partial_image))
+								did_partial = True
+						except Exception:
+							did_partial = False
+
+						if not did_partial:
+							# fallback: composite onto last_full_image and send full buffer
+							if last_full_image is None:
+								last_full_image = Image.new('1', epaper_size, 255)
+							try:
+								last_full_image.paste(partial_image, (0, 0))
+								epd.display(epd.getbuffer(last_full_image))
+								epd.sleep()
+							except Exception:
+								try:
+									epd.display(epd.getbuffer(partial_image))
+									epd.sleep()
+								except Exception:
+									pass
+
+						# update stored value
+						if i < len(last_values['rooms']):
+							last_values['rooms'][i] = r
+						else:
+							last_values['rooms'].append(r)
+
+			time.sleep(poll_interval)
+	except KeyboardInterrupt:
+		try:
+			epd.sleep()
+		except Exception:
+			pass
+		print('Exiting')
+
+
+if __name__ == '__main__':
+	run_loop()
 
 
