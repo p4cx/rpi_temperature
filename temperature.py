@@ -1,5 +1,3 @@
-# removed unused imports (sys, os)
-
 try:
 	import epaper
 except Exception:
@@ -8,12 +6,11 @@ import time
 from PIL import Image,ImageDraw,ImageFont
 
 font = ImageFont.truetype("./res/monofonto.otf", 35)
-# smaller font for labels / humidity
 small_font = ImageFont.truetype("./res/monofonto.otf", 16)
 epaper_size = (122, 250)
 
 # Layout constants
-CLOCK_HEIGHT = 50
+CLOCK_HEIGHT = 48
 GAP_AFTER_CLOCK = 2
 BOX_HEIGHT = 46
 INTER_BOX_GAP = 4
@@ -32,16 +29,13 @@ else:
 		def Clear(self, v):
 			print(f"DummyEPD.Clear({v})")
 		def display(self, buffer):
-			# for testing, save image buffer to file if it's a PIL Image or raw bytes
 			try:
 				from PIL import Image
 				import os
-				# ensure preview directory exists
 				os.makedirs('./res/preview', exist_ok=True)
 				if isinstance(buffer, Image.Image):
 					image = buffer
 				else:
-					# try to interpret as raw bytes for a 1-bit image
 					try:
 						image = Image.frombytes('1', epaper_size, buffer)
 					except Exception:
@@ -69,6 +63,104 @@ else:
 	epd.init()
 	epd.Clear(0xFF)
 
+# Helper to send buffers to various epd driver signatures
+def _send_to_epd(pil_image):
+	"""Send a PIL image to the epd using the driver's available display API.
+	Tries epd.display(black, red) then epd.display(buffer). Works with DummyEPD and
+	Waveshare drivers that expect raw buffers.
+	Returns True on success, False otherwise.
+	"""
+	try:
+		buf = epd.getbuffer(pil_image)
+	except Exception:
+		return False
+
+	# If the driver returned a PIL image (DummyEPD), prefer sending that directly
+	try:
+		# Try two-argument display (black, red)
+		try:
+			# create a blank buffer only if buf is a bytes-like sequence
+			if isinstance(buf, (bytes, bytearray)):
+				blank = bytearray([0xFF]) * len(buf)
+				epd.display(buf, blank)
+			else:
+				# assume driver will error on two args for PIL-backed DummyEPD
+				epd.display(buf, buf)
+			return True
+		except TypeError:
+			# driver expects a single buffer or PIL image
+			epd.display(buf)
+			return True
+	except Exception:
+		# final fallback: try single-arg display with the original pil_image
+		try:
+			epd.display(pil_image)
+			return True
+		except Exception:
+			return False
+
+
+def _send_partial(pil_image, x=0, y=0, w=None, h=None):
+	"""Try to send only a region to the display using common driver partial APIs.
+	If no partial API is available, fallback to sending the full image via _send_to_epd.
+	"""
+	try:
+		if w is None:
+			w = epaper_size[0]
+		if h is None:
+			h = epaper_size[1]
+
+		# Prefer a low-level partial update using Waveshare methods if available
+		if all(hasattr(epd, name) for name in ('set_windows', 'set_cursor', 'send_data2', 'ondisplay')):
+			try:
+				# crop region from image to minimal buffer
+				region = pil_image.crop((x, y, x + w, y + h)).convert('1')
+				rw, rh = region.size
+				# pad width to byte boundary
+				line_bytes = (rw + 7) // 8
+				if rw % 8 != 0:
+					padded = Image.new('1', (line_bytes * 8, rh), 255)
+					padded.paste(region, (0, 0))
+					region = padded
+					rw = region.size[0]
+				buf = bytearray(region.tobytes())
+
+				# set window and cursor and send data
+				epd.set_windows(x, y, x + w - 1, y + h - 1)
+				epd.set_cursor(x, y)
+				# command for writing black RAM may be required by driver; try send_command if present
+				if hasattr(epd, 'send_command'):
+					try:
+						epd.send_command(0x24)
+					except Exception:
+						pass
+				epd.send_data2(buf)
+				# trigger update of the written area
+				epd.ondisplay()
+				return True
+			except Exception:
+				# fallthrough to other partial APIs
+				pass
+
+		# driver-level convenience methods
+		if hasattr(epd, 'display_partial'):
+			try:
+				epd.display_partial(epd.getbuffer(pil_image), x=x, y=y, w=w, h=h)
+				return True
+			except TypeError:
+				epd.display_partial(epd.getbuffer(pil_image))
+				return True
+
+		if hasattr(epd, 'displayPartial'):
+			epd.displayPartial(epd.getbuffer(pil_image))
+			return True
+	except Exception:
+		# ignore and fallback
+		pass
+
+	# fallback to full send
+	return _send_to_epd(pil_image)
+
 def draw_battery(draw, x, y, level, w=100, h=4):
 	fill_pct = 0
 	try:
@@ -77,7 +169,6 @@ def draw_battery(draw, x, y, level, w=100, h=4):
 	except Exception:
 		fill_pct = 0
 	fill_w = int(w * (fill_pct / 100.0))
-	# do not draw outer frame; render only the filled portion so the bar looks like a loading strip
 	if fill_w > 0:
 		draw.rectangle((x, y + (h - (h))//2, x + fill_w, y + h - (h)//2), outline=0, fill=0)
 
@@ -104,9 +195,7 @@ def draw_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=No
 		), fill=0)
 	# inner white area (frame effect) with matching small cut at top-right
 	inner_left = pos_x + border
-	inner_top = pos_y + border
 	inner_right = pos_x + width - border
-	inner_bottom = pos_y + height - border
 
 	# Clock mode: full-width black box with centered white time
 	if clock_text is not None:
@@ -172,28 +261,28 @@ def draw_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=No
 		deg_w = temp_font.getlength(deg)
 		unit_w = temp_font.getlength(unit)
 		total_w = left_w + dot_w + right_w + deg_w + unit_w
-		tx_base = inner_left + int((inner_width - total_w) * 0.18)
-		ty = pos_y + 6 + 2
+		tx_base = inner_left + int((inner_width - total_w) * 0.1)
+		ty = pos_y + 6
 		x = tx_base
 		image_draw.text((x, ty), left, font=temp_font, fill=0)
 		x += left_w
-		overlap_dot = 2
+		overlap_dot = 3
 		image_draw.text((x - overlap_dot, ty), '.', font=temp_font, fill=0)
 		x = x - overlap_dot + dot_w
-		overlap_frac = 2
+		overlap_frac = 3
 		image_draw.text((x - overlap_frac, ty), right, font=temp_font, fill=0)
 		x = x - overlap_frac + right_w
-		overlap_deg = 2
+		overlap_deg = 0
 		image_draw.text((x - overlap_deg, ty), deg, font=temp_font, fill=0)
 		x = x - overlap_deg + deg_w
-		overlap_unit = 1
+		overlap_unit = 3
 		image_draw.text((x - overlap_unit, ty), unit, font=temp_font, fill=0)
 
 	# humidity bottom-right inside inner area
 	if humidity is not None:
 		hum_text = f"{int(humidity)}%"
 		hf_w = small_font.getlength(hum_text)
-		small_margin = 4
+		small_margin = 2
 		hx = label_x
 		if hx + hf_w > inner_right - small_margin:
 			hx = inner_right - small_margin - hf_w
@@ -206,7 +295,7 @@ def draw_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=No
 def render_once():
 	# Sample sensor data for four rooms. In real usage replace these with live readings.
 	rooms = [
-		{"name": "Living", "temp": 21.3, "hum": 45, "bat": 97},
+		{"name": "Living", "temp": 1.3, "hum": 100, "bat": 5},
 		{"name": "Kitchen", "temp": 23.8, "hum": 50, "bat": 12},
 		{"name": "Bedroom", "temp": 19.6, "hum": 55, "bat": 35},
 		{"name": "Office", "temp": 20.1, "hum": 48, "bat": 67},
@@ -223,14 +312,14 @@ def render_once():
 	draw_box(display_draw, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
 	# Draw four temp boxes below the clock box
 	for i, r in enumerate(rooms):
-		y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
+		y = box_y + CLOCK_HEIGHT + INTER_BOX_GAP+ i * (BOX_HEIGHT + INTER_BOX_GAP)
 		draw_box(display_draw, pos_y=y, height=BOX_HEIGHT, room_name=r['name'], temp_c=r['temp'], humidity=r['hum'], battery_level=r['bat'])
 
 	# send to epaper
 	try:
 		if epaper is not None:
 			epd.init()
-		epd.display(epd.getbuffer(display_image))
+		_send_to_epd(display_image)
 		epd.sleep()
 	except Exception:
 		# Ensure dummy still tries to display
@@ -258,7 +347,7 @@ def run_loop():
 
 			# get current sensor data (replace this with real data retrieval)
 			rooms = [
-				{"name": "Living", "temp": 21.3, "hum": 45, "bat": 97},
+				{"name": "Living", "temp": 1.3, "hum": 45, "bat": 5},
 				{"name": "Kitchen", "temp": 23.8, "hum": 50, "bat": 12},
 				{"name": "Bedroom", "temp": 19.6, "hum": 55, "bat": 35},
 				{"name": "Office", "temp": 20.1, "hum": 48, "bat": 67},
@@ -281,8 +370,8 @@ def run_loop():
 				try:
 					if epaper is not None:
 						epd.init()
-					epd.display(epd.getbuffer(full_image))
-					epd.sleep()
+						_send_to_epd(full_image)
+						epd.sleep()
 				except Exception:
 					try:
 						epd.display(epd.getbuffer(full_image))
@@ -367,13 +456,14 @@ def run_loop():
 								last_full_image = Image.new('1', epaper_size, 255)
 							try:
 								last_full_image.paste(partial_image, (0, 0))
-								epd.display(epd.getbuffer(last_full_image))
+								_send_to_epd(last_full_image)
 								epd.sleep()
 								# count this as a partial update (we displayed a composite)
 								partial_update_counter += 1
 							except Exception:
 								try:
-									epd.display(epd.getbuffer(partial_image))
+									epd.init()
+									_send_to_epd(partial_image)
 									epd.sleep()
 									# even this fallback counts as a partial attempt
 									partial_update_counter += 1
@@ -395,12 +485,12 @@ def run_loop():
 					box_y = 0
 					draw_box(full_drawer, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
 					for i, room in enumerate(rooms):
-						y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
+						y = box_y + CLOCK_HEIGHT + INTER_BOX_GAP + i * (BOX_HEIGHT + INTER_BOX_GAP)
 						draw_box(full_drawer, pos_y=y, height=BOX_HEIGHT, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
 					if epaper is not None:
 						epd.init()
-					epd.display(epd.getbuffer(full_image))
-					epd.sleep()
+						_send_to_epd(full_image)
+						epd.sleep()
 				except Exception:
 					try:
 						epd.display(epd.getbuffer(full_image))
