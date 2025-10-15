@@ -202,17 +202,36 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 						used_buf = bytes(buf)
 						print("_send_partial: falling back to raw region.tobytes() as buffer for windowed write, len=", len(used_buf))
 
-					# Some drivers expect inverted bits; try sending raw first, then inverted if behavior wrong.
+					# Some drivers choke on large SPI bursts. Send in small chunks and prefer send_data if available.
+					import errno as _errno
+					writer = None
+					if hasattr(epd, 'send_data'):
+						writer = epd.send_data
+					elif hasattr(epd, 'send_data2'):
+						writer = epd.send_data2
+					else:
+						writer = None
+
+					def _chunked_write(buf_bytes, write_func):
+						chunk = 256
+						for i in range(0, len(buf_bytes), chunk):
+							part = buf_bytes[i:i+chunk]
+							write_func(part)
+							# tiny pause to avoid overwhelming SPI
+							time.sleep(0.01)
+
 					try:
-						epd.send_data2(used_buf)
+						if writer is not None:
+							_chunked_write(used_buf, writer)
+						else:
+							# last-resort: try send_data2 attribute directly
+							epd.send_data2(used_buf)
 					except OSError as ose:
-						# catch Bad file descriptor from SPI writes
-						if getattr(ose, 'errno', None) == 9:
+						if getattr(ose, 'errno', None) == _errno.EBADF or getattr(ose, 'errno', None) == 9:
 							print("_send_partial: low-level window API OSError Errno 9 (Bad file descriptor):", ose)
 							try:
 								print("_send_partial: attempting epd.init() to recover SPI and then falling back to full send")
 								epd.init()
-								# try a full send as recovery
 								_send_to_epd(pil_image)
 								try:
 									epd.sleep()
@@ -221,24 +240,29 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 								return True
 							except Exception as reinit_e:
 								print("_send_partial: epd.init() during recovery failed:", reinit_e)
-								# allow fallthrough to other attempts
-						# otherwise fallthrough to try inverted buffer
-						print("_send_partial: send_data2 with used_buf failed (non-Errno9):", ose)
+								# allow fallthrough to try inverted buffer
+						# otherwise, try inverted buffer with same strategy
 						try:
 							inv = bytes((b ^ 0xFF) for b in used_buf)
-							epd.send_data2(inv)
-							print("_send_partial: send_data2 succeeded with inverted buffer")
+							if writer is not None:
+								_chunked_write(inv, writer)
+							else:
+								epd.send_data2(inv)
+							print("_send_partial: send succeeded with inverted buffer")
 						except Exception as e2:
-							print("_send_partial: send_data2 inverted also failed:", e2)
+							print("_send_partial: send_data inverted also failed:", e2)
 							raise
 					except Exception as e:
-						print("_send_partial: send_data2 with used_buf failed:", e)
+						print("_send_partial: send_data write failed:", e)
 						try:
 							inv = bytes((b ^ 0xFF) for b in used_buf)
-							epd.send_data2(inv)
-							print("_send_partial: send_data2 succeeded with inverted buffer")
+							if writer is not None:
+								_chunked_write(inv, writer)
+							else:
+								epd.send_data2(inv)
+							print("_send_partial: send succeeded with inverted buffer (second try)")
 						except Exception as e2:
-							print("_send_partial: send_data2 inverted also failed:", e2)
+							print("_send_partial: inverted send also failed:", e2)
 							raise
 
 					# trigger a PARTIAL update using available method
