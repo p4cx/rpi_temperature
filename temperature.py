@@ -205,6 +205,32 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 					# Some drivers expect inverted bits; try sending raw first, then inverted if behavior wrong.
 					try:
 						epd.send_data2(used_buf)
+					except OSError as ose:
+						# catch Bad file descriptor from SPI writes
+						if getattr(ose, 'errno', None) == 9:
+							print("_send_partial: low-level window API OSError Errno 9 (Bad file descriptor):", ose)
+							try:
+								print("_send_partial: attempting epd.init() to recover SPI and then falling back to full send")
+								epd.init()
+								# try a full send as recovery
+								_send_to_epd(pil_image)
+								try:
+									epd.sleep()
+								except Exception:
+									pass
+								return True
+							except Exception as reinit_e:
+								print("_send_partial: epd.init() during recovery failed:", reinit_e)
+								# allow fallthrough to other attempts
+						# otherwise fallthrough to try inverted buffer
+						print("_send_partial: send_data2 with used_buf failed (non-Errno9):", ose)
+						try:
+							inv = bytes((b ^ 0xFF) for b in used_buf)
+							epd.send_data2(inv)
+							print("_send_partial: send_data2 succeeded with inverted buffer")
+						except Exception as e2:
+							print("_send_partial: send_data2 inverted also failed:", e2)
+							raise
 					except Exception as e:
 						print("_send_partial: send_data2 with used_buf failed:", e)
 						try:
