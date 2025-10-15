@@ -142,12 +142,8 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 			h = epaper_size[1]
 
 		# Prefer a low-level partial update using Waveshare methods if available
-		# Ensure driver is initialized before attempting low-level partial calls
-		try:
-			epd.init()
-			print("_send_partial: epd.init() called before partial")
-		except Exception as ie:
-			print("_send_partial: epd.init() failed:", ie)
+		# Assume the driver is initialized already (calling epd.init() here can reset display state)
+		print("_send_partial: assuming epd already initialized")
 
 		if (all(hasattr(epd, name) for name in ('SetWindow', 'SetCursor', 'send_data2', 'TurnOnDisplayPart'))
 				or all(hasattr(epd, name) for name in ('set_windows', 'set_cursor', 'send_data2', 'ondisplay'))):
