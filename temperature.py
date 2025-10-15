@@ -26,11 +26,6 @@ if epaper is not None:
 		attrs = sorted(dir(epd))
 		print("EPD attributes:")
 		print('\n'.join(attrs))
-		# also write to debug file in res
-		import os
-		os.makedirs('res', exist_ok=True)
-		with open('res/epd_debug.txt', 'w') as f:
-			f.write('\n'.join(attrs))
 	except Exception as e:
 		print("Could not list epd attributes:", e)
 else:
