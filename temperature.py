@@ -180,7 +180,48 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 						epd.send_command(0x24)
 					except Exception:
 						pass
-					epd.send_data2(buf)
+					# Prefer driver-provided buffer formatting when available
+					used_buf = None
+					try:
+						gb = epd.getbuffer
+					except Exception:
+						gb = None
+					if gb is not None:
+						try:
+							candidate = epd.getbuffer(region)
+							if isinstance(candidate, (bytes, bytearray)) and len(candidate) > 0:
+								used_buf = candidate
+								print("_send_partial: using epd.getbuffer(region) as buffer")
+						except Exception as e:
+							print("_send_partial: epd.getbuffer(region) failed:", e)
+					# try building a same-sized buffer and asking driver to format it
+					if used_buf is None and gb is not None:
+						try:
+							small_buf_img = Image.new('1', (rw, rh), 255)
+							small_buf_img.paste(region, (0, 0))
+							candidate = epd.getbuffer(small_buf_img)
+							if isinstance(candidate, (bytes, bytearray)) and len(candidate) > 0:
+								used_buf = candidate
+								print("_send_partial: using epd.getbuffer(small_buf_img) as buffer")
+						except Exception as e:
+							print("_send_partial: epd.getbuffer(small_buf_img) failed:", e)
+					# fallback to raw bytes derived from pillow
+					if used_buf is None:
+						used_buf = bytes(buf)
+						print("_send_partial: using raw region.tobytes() as buffer")
+
+					# Some drivers expect inverted bits; try sending raw first, then inverted if behavior wrong.
+					try:
+						epd.send_data2(used_buf)
+					except Exception as e:
+						print("_send_partial: send_data2 with used_buf failed:", e)
+						try:
+							inv = bytes((b ^ 0xFF) for b in used_buf)
+							epd.send_data2(inv)
+							print("_send_partial: send_data2 succeeded with inverted buffer")
+						except Exception as e2:
+							print("_send_partial: send_data2 inverted also failed:", e2)
+							raise
 
 					# trigger a PARTIAL update using available method
 					if hasattr(epd, 'TurnOnDisplayPart'):
