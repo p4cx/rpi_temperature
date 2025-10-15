@@ -21,6 +21,18 @@ if epaper is not None:
 	epd = epaper.epaper('epd2in13_V4').EPD()
 	epd.init()
 	epd.Clear(0xFF)
+	# log available epd attributes for debugging driver compatibility
+	try:
+		attrs = sorted(dir(epd))
+		print("EPD attributes:")
+		print('\n'.join(attrs))
+		# also write to debug file in res
+		import os
+		os.makedirs('res', exist_ok=True)
+		with open('res/epd_debug.txt', 'w') as f:
+			f.write('\n'.join(attrs))
+	except Exception as e:
+		print("Could not list epd attributes:", e)
 else:
 	# Dummy epd replacement for development on non-RPi machines
 	class _DummyEPD:
@@ -73,6 +85,7 @@ def _send_to_epd(pil_image):
 	try:
 		buf = epd.getbuffer(pil_image)
 	except Exception:
+		print("_send_to_epd: epd.getbuffer failed")
 		return False
 
 	# If the driver returned a PIL image (DummyEPD), prefer sending that directly
@@ -82,15 +95,22 @@ def _send_to_epd(pil_image):
 			# create a blank buffer only if buf is a bytes-like sequence
 			if isinstance(buf, (bytes, bytearray)):
 				blank = bytearray([0xFF]) * len(buf)
+				print(f"_send_to_epd: using epd.display(buf, blank), buf_len={len(buf)}")
 				epd.display(buf, blank)
 			else:
 				# assume driver will error on two args for PIL-backed DummyEPD
+				print("_send_to_epd: using epd.display(buf, buf) with non-bytes buf")
 				epd.display(buf, buf)
 			return True
 		except TypeError:
 			# driver expects a single buffer or PIL image
-			epd.display(buf)
-			return True
+			try:
+				print("_send_to_epd: falling back to epd.display(buf)")
+				epd.display(buf)
+				return True
+			except Exception:
+				print("_send_to_epd: epd.display(buf) failed")
+				return False
 	except Exception:
 		# final fallback: try single-arg display with the original pil_image
 		try:
@@ -125,40 +145,66 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 					rw = region.size[0]
 				buf = bytearray(region.tobytes())
 
+				print(f"_send_partial: using low-level set_windows x={x} y={y} w={w} h={h} buf_len={len(buf)}")
+
 				# set window and cursor and send data
 				epd.set_windows(x, y, x + w - 1, y + h - 1)
 				epd.set_cursor(x, y)
-				# command for writing black RAM may be required by driver; try send_command if present
-				if hasattr(epd, 'send_command'):
-					try:
-						epd.send_command(0x24)
-					except Exception:
-						pass
 				epd.send_data2(buf)
-				# trigger update of the written area
-				epd.ondisplay()
+				# Try to trigger a partial refresh using common Waveshare sequence
+				try:
+					if hasattr(epd, 'send_command') and hasattr(epd, 'send_data'):
+						print("_send_partial: trying 0x22/0x20 partial update sequence")
+						try:
+							epd.send_command(0x22)
+							# 0xC7 is a commonly used display update control value for partial
+							epd.send_data(0xC7)
+							epd.send_command(0x20)
+							if hasattr(epd, 'busy'):
+								epd.busy()
+							return True
+						except Exception as e:
+							print("_send_partial: 0x22/0x20 sequence failed:", e)
+							# fallthrough to ondisplay
+							pass
+				except Exception:
+					pass
+				# fallback to ondisplay if available
+				if hasattr(epd, 'ondisplay'):
+					try:
+						epd.ondisplay()
+						return True
+					except Exception as e:
+						print("_send_partial: epd.ondisplay failed:", e)
+						return False
 				return True
-			except Exception:
+			except Exception as e:
+				print("_send_partial: low-level partial failed:", e)
 				# fallthrough to other partial APIs
 				pass
 
 		# driver-level convenience methods
 		if hasattr(epd, 'display_partial'):
 			try:
+				print(f"_send_partial: using epd.display_partial x={x} y={y} w={w} h={h}")
 				epd.display_partial(epd.getbuffer(pil_image), x=x, y=y, w=w, h=h)
 				return True
 			except TypeError:
+				print("_send_partial: display_partial accepted only buffer")
 				epd.display_partial(epd.getbuffer(pil_image))
 				return True
 
 		if hasattr(epd, 'displayPartial'):
+			print("_send_partial: using epd.displayPartial")
 			epd.displayPartial(epd.getbuffer(pil_image))
 			return True
-	except Exception:
+	except Exception as e:
+		print("_send_partial: driver partial attempts raised:", e)
 		# ignore and fallback
 		pass
 
 	# fallback to full send
+	print("_send_partial: falling back to full send")
 	return _send_to_epd(pil_image)
 
 def draw_battery(draw, x, y, level, w=100, h=4):
@@ -389,9 +435,12 @@ def run_loop():
 						clock_draw = ImageDraw.Draw(clock_partial)
 						time_string = time.strftime('%H:%M')
 						draw_box(clock_draw, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
-						if _send_partial(clock_partial, x=0, y=box_y, w=epaper_size[0], h=CLOCK_HEIGHT):
-							# composite onto stored full image
-							last_full_image.paste(clock_partial, (0, 0))
+						sent = _send_partial(clock_partial, x=0, y=box_y, w=epaper_size[0], h=CLOCK_HEIGHT)
+						# always update stored full image so our state stays consistent
+						if last_full_image is None:
+							last_full_image = Image.new('1', epaper_size, 255)
+						last_full_image.paste(clock_partial, (0, 0))
+						if sent:
 							partial_update_counter += 1
 					except Exception:
 						pass
@@ -415,8 +464,12 @@ def run_loop():
 								partial_image = Image.new('1', epaper_size, 255)
 								partial_drawer = ImageDraw.Draw(partial_image)
 								draw_box(partial_drawer, pos_y=y, height=BOX_HEIGHT, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
-								if _send_partial(partial_image, x=0, y=y, w=epaper_size[0], h=BOX_HEIGHT):
-									last_full_image.paste(partial_image, (0, 0))
+								sent = _send_partial(partial_image, x=0, y=y, w=epaper_size[0], h=BOX_HEIGHT)
+								# always update stored full image
+								if last_full_image is None:
+									last_full_image = Image.new('1', epaper_size, 255)
+								last_full_image.paste(partial_image, (0, 0))
+								if sent:
 									partial_update_counter += 1
 							except Exception:
 								pass
