@@ -502,13 +502,12 @@ def run_loop():
 						time_string = time.strftime('%H:%M')
 						draw_box(clock_draw, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
 						sent = _send_partial(clock_partial, x=0, y=box_y, w=epaper_size[0], h=CLOCK_HEIGHT)
-						# always update stored full image so our state stays consistent
-						if last_full_image is None:
-							last_full_image = Image.new('1', epaper_size, 255)
-							# paste only non-white pixels so we don't erase existing content on failed/partial updates
+						# update stored full image only if partial send succeeded
+						if sent:
+							if last_full_image is None:
+								last_full_image = Image.new('1', epaper_size, 255)
 							mask = clock_partial.convert('L').point(lambda p: 255 - p)
 							last_full_image.paste(clock_partial, (0, 0), mask)
-						if sent:
 							partial_update_counter += 1
 					except Exception:
 						pass
@@ -533,13 +532,12 @@ def run_loop():
 								partial_drawer = ImageDraw.Draw(partial_image)
 								draw_box(partial_drawer, pos_y=y, height=BOX_HEIGHT, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
 								sent = _send_partial(partial_image, x=0, y=y, w=epaper_size[0], h=BOX_HEIGHT)
-								# always update stored full image
-								if last_full_image is None:
-									last_full_image = Image.new('1', epaper_size, 255)
-								# paste only non-white pixels to avoid wiping existing display state
-								mask = partial_image.convert('L').point(lambda p: 255 - p)
-								last_full_image.paste(partial_image, (0, 0), mask)
+								# update stored full image only if send succeeded
 								if sent:
+									if last_full_image is None:
+										last_full_image = Image.new('1', epaper_size, 255)
+									mask = partial_image.convert('L').point(lambda p: 255 - p)
+									last_full_image.paste(partial_image, (0, 0), mask)
 									partial_update_counter += 1
 							except Exception:
 								pass
