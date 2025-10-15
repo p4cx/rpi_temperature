@@ -180,27 +180,10 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 						epd.send_command(0x24)
 					except Exception:
 						pass
-					# Prefer driver-provided buffer formatting when available
-					used_buf = None
-					try:
-						gb = epd.getbuffer
-					except Exception:
-						gb = None
-					if gb is not None:
-						try:
-							# Some drivers require a full-size image for getbuffer(); create a full image and paste region
-							full_buf_img = Image.new('1', epaper_size, 255)
-							full_buf_img.paste(region, (x, y))
-							candidate = epd.getbuffer(full_buf_img)
-							if isinstance(candidate, (bytes, bytearray)) and len(candidate) > 0:
-								used_buf = candidate
-								print("_send_partial: using epd.getbuffer(full_buf_img) as buffer, len=", len(candidate))
-						except Exception as e:
-							print("_send_partial: epd.getbuffer(full_buf_img) failed:", e)
-					# fallback to raw bytes derived from pillow
-					if used_buf is None:
-						used_buf = bytes(buf)
-						print("_send_partial: using raw region.tobytes() as buffer, len=", len(used_buf))
+					# For windowed low-level writes, the driver expects region-sized data matching SetWindow.
+					# Use the region-derived buffer (padded to byte boundary) as the canonical payload.
+					used_buf = bytes(buf)
+					print("_send_partial: using raw region.tobytes() as buffer for windowed write, len=", len(used_buf))
 
 					# Some drivers expect inverted bits; try sending raw first, then inverted if behavior wrong.
 					try:
