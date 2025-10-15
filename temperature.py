@@ -141,15 +141,59 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 		if h is None:
 			h = epaper_size[1]
 
-		# Prefer a low-level partial update using Waveshare methods if available
 		# Assume the driver is initialized already (calling epd.init() here can reset display state)
 		print("_send_partial: assuming epd already initialized")
 
+		# crop region from image to minimal buffer
+		region = pil_image.crop((x, y, x + w, y + h)).convert('1')
+		# First prefer driver convenience partial methods when available
+		try:
+			if hasattr(epd, 'display_partial'):
+				print(f"_send_partial: trying epd.display_partial x={x} y={y} w={w} h={h}")
+				try:
+					epd.display_partial(epd.getbuffer(pil_image), x=x, y=y, w=w, h=h)
+					return True
+				except TypeError:
+					# some drivers accept only buffer
+					try:
+						epd.display_partial(epd.getbuffer(pil_image))
+						return True
+					except OSError as ose:
+						if getattr(ose, 'errno', None) == 9:
+							print("_send_partial: display_partial raised Errno 9, attempting epd.init() and retry")
+							try:
+								epd.init()
+								epd.display_partial(epd.getbuffer(pil_image), x=x, y=y, w=w, h=h)
+								return True
+							except Exception:
+								pass
+						# fallthrough to other methods
+					except Exception:
+						# other errors, fallthrough
+						pass
+			if hasattr(epd, 'displayPartial'):
+				print("_send_partial: trying epd.displayPartial")
+				try:
+					epd.displayPartial(epd.getbuffer(pil_image))
+					return True
+				except OSError as ose:
+					if getattr(ose, 'errno', None) == 9:
+						print("_send_partial: displayPartial raised Errno 9, attempting epd.init() and retry")
+						try:
+							epd.init()
+							epd.displayPartial(epd.getbuffer(pil_image))
+							return True
+						except Exception:
+							pass
+		except Exception:
+			# fallthrough to low-level window API if convenience methods fail
+			pass
+
+		# If convenience methods were not used/successful, try low-level windowed writes
 		if (all(hasattr(epd, name) for name in ('SetWindow', 'SetCursor', 'send_data2', 'TurnOnDisplayPart'))
 				or all(hasattr(epd, name) for name in ('set_windows', 'set_cursor', 'send_data2', 'ondisplay'))):
 			try:
-				# crop region from image to minimal buffer
-				region = pil_image.crop((x, y, x + w, y + h)).convert('1')
+				# region already prepared
 				rw, rh = region.size
 				# pad width to byte boundary
 				line_bytes = (rw + 7) // 8
