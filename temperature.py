@@ -387,7 +387,7 @@ def render_once():
 	draw_box(display_draw, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
 	# Draw four temp boxes below the clock box
 	for i, r in enumerate(rooms):
-		y = box_y + CLOCK_HEIGHT + INTER_BOX_GAP+ i * (BOX_HEIGHT + INTER_BOX_GAP)
+		y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
 		draw_box(display_draw, pos_y=y, height=BOX_HEIGHT, room_name=r['name'], temp_c=r['temp'], humidity=r['hum'], battery_level=r['bat'])
 
 	# send to epaper
@@ -551,7 +551,7 @@ def run_loop():
 						box_y = 0
 						clock_h = 50
 						box_h = 45
-						y = box_y + clock_h + 4 + i * (box_h + 4)
+						y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
 						# create a partial image the same size as full screen but only draw the affected box
 						partial_image = Image.new('1', epaper_size, 255)
 						partial_drawer = ImageDraw.Draw(partial_image)
@@ -609,7 +609,7 @@ def run_loop():
 					box_y = 0
 					draw_box(full_drawer, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
 					for i, room in enumerate(rooms):
-						y = box_y + CLOCK_HEIGHT + INTER_BOX_GAP + i * (BOX_HEIGHT + INTER_BOX_GAP)
+						y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
 						draw_box(full_drawer, pos_y=y, height=BOX_HEIGHT, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
 					if epaper is not None:
 						epd.init()
