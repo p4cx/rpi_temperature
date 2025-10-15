@@ -614,7 +614,9 @@ def run_loop():
 							if last_full_image is None:
 								last_full_image = Image.new('1', epaper_size, 255)
 							try:
-								last_full_image.paste(partial_image, (0, 0))
+								# paste only non-white pixels so the stored full image isn't erased
+								mask = partial_image.convert('L').point(lambda p: 255 - p)
+								last_full_image.paste(partial_image, (0, 0), mask)
 								_send_to_epd(last_full_image)
 								epd.sleep()
 								# count this as a partial update (we displayed a composite)
