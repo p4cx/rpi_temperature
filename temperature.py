@@ -1,5 +1,4 @@
-import sys
-import os
+# removed unused imports (sys, os)
 
 try:
 	import epaper
@@ -8,11 +7,18 @@ except Exception:
 import time
 from PIL import Image,ImageDraw,ImageFont
 
-debug = True
 font = ImageFont.truetype("./res/monofonto.otf", 35)
 # smaller font for labels / humidity
 small_font = ImageFont.truetype("./res/monofonto.otf", 16)
 epaper_size = (122, 250)
+
+# Layout constants
+CLOCK_HEIGHT = 50
+GAP_AFTER_CLOCK = 2
+BOX_HEIGHT = 46
+INTER_BOX_GAP = 4
+# After this many partial updates, force a full screen refresh
+FULL_UPDATE_AFTER_PARTIALS = 10
 
 if epaper is not None:
 	epd = epaper.epaper('epd2in13_V4').EPD()
@@ -63,61 +69,32 @@ else:
 	epd.init()
 	epd.Clear(0xFF)
 
-def draw_battery(draw, x, y, level, w=100, h=6, padding=2):
-	"""Draw a horizontal loading-bar style battery at (x,y) with width w and height h.
-	level: 0..4 meaning 0%,25%,50%,75%,100% - we fill fraction = level/4. Glued to top inner border by caller.
-	x,y correspond to the left-top of the bar area."""
-	# Accept either percentage (0..100) or legacy level (0..4)
+def draw_battery(draw, x, y, level, w=100, h=4):
 	fill_pct = 0
 	try:
 		lvl = float(level)
-		if lvl <= 4:
-			# legacy mode: map 0..4 to 0..100
-			fill_pct = int((lvl / 4.0) * 100)
-		else:
-			# assume it's already a percent value
-			fill_pct = int(max(0, min(100, lvl)))
+		fill_pct = int(max(0, min(100, lvl)))
 	except Exception:
 		fill_pct = 0
-	inner_w = w - 2 * padding
-	fill_w = int(inner_w * (fill_pct / 100.0))
+	fill_w = int(w * (fill_pct / 100.0))
 	# do not draw outer frame; render only the filled portion so the bar looks like a loading strip
 	if fill_w > 0:
-		draw.rectangle((x + padding, y + (h - (h - padding))//2, x + padding + fill_w, y + h - (h - padding)//2), outline=0, fill=0)
+		draw.rectangle((x, y + (h - (h))//2, x + fill_w, y + h - (h)//2), outline=0, fill=0)
 
 
 def draw_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=None, battery_level=0, clock_text=None):
-	# unified box drawer: can render a temperature box or a clock box when clock_text is provided
-	# make boxes use full width of epaper (no extra side margins)
-	pos_x = 0
+	"""Draw a single box at vertical position pos_y with given height.
+	If clock_text is provided, draw a black clock box with centered white text.
+	Otherwise draw a framed box (black outer, white inner) and render room letter, battery bar,
+	temperature (left) and humidity (bottom/right).
+	"""
 	width = epaper_size[0]
-	cut = 10
+	pos_x = 0
+	# simple frame parameters
 	border = 4
-	# if clock_text is provided, draw a full black box and center white text
-	if clock_text is not None:
-		image_draw.polygon((
-			(pos_x, pos_y),
-			(pos_x + (width - 2 * pos_x) - cut, pos_y),
-			(pos_x + (width - 2 * pos_x), pos_y + cut),
-			(pos_x + (width - 2 * pos_x), pos_y + height),
-			(pos_x, pos_y + height)
-			), fill=0)
-		# center clock text
-		font_to_use = font
-		try:
-			text_width = font_to_use.getlength(clock_text)
-			text_x = (width - text_width) / 2
-			# shift clock text slightly upward so it doesn't sit on the same horizontal band as the battery bar
-			preferred_y = pos_y + (height - font_to_use.size) / 2 - 6
-			# clamp so text stays inside the box
-			text_y = max(pos_y + 2, preferred_y)
-		except Exception:
-			text_x = pos_x + 8
-			text_y = pos_y + 4
-		image_draw.text((text_x, text_y), clock_text, font=font_to_use, fill=255)
-		return image_draw
+	cut = 10
 
-	# outer filled polygon (box background)
+		# normal box: outer black polygon with a cut-off top-right corner for style
 	image_draw.polygon((
 		(pos_x, pos_y),
 		(pos_x + (width - 2 * pos_x) - cut, pos_y),
@@ -125,26 +102,42 @@ def draw_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=No
 		(pos_x + (width - 2 * pos_x), pos_y + height),
 		(pos_x, pos_y + height)
 		), fill=0)
-	# inner cutout
-	image_draw.polygon((
-		(pos_x + border, pos_y + border),
-		(pos_x + border + (width - 2 * (pos_x + border * 0.65)) - cut, pos_y + border),
-		(pos_x + border + (width - 2 * (pos_x + border)), pos_y + cut + border * 0.5),
-		(pos_x + border + (width - 2 * (pos_x + border)), pos_y + height - border),
-		(pos_x + border, pos_y + height - border)
-		), fill=255)
+	# inner white area (frame effect) with matching small cut at top-right
+	inner_left = pos_x + border
+	inner_top = pos_y + border
+	inner_right = pos_x + width - border
+	inner_bottom = pos_y + height - border
 
-	# If sensor values provided, draw them with updated layout per feedback
-	# compute inner content area (respect border)
-	inner_left = pos_x + border - 1
-	inner_right = pos_x + width - border + 1
+	# Clock mode: full-width black box with centered white time
+	if clock_text is not None:
+		# center text
+		font_to_use = font
+		try:
+			text_width = font_to_use.getlength(clock_text)
+			text_x = pos_x + (width - text_width) / 2
+			preferred_y = pos_y + (height - font_to_use.size) / 2 - 6
+			text_y = max(pos_y + 2, preferred_y)
+		except Exception:
+			text_x = pos_x + 8
+			text_y = pos_y + 4
+		image_draw.text((text_x, text_y), clock_text, font=font_to_use, fill=255)
+		return image_draw
+	else:
+		image_draw.polygon((
+			(pos_x + border, pos_y + border),
+			(pos_x + border + (width - 2 * (pos_x + border * 0.65)) - cut, pos_y + border),
+			(pos_x + border + (width - 2 * (pos_x + border)), pos_y + cut + border * 0.5),
+			(pos_x + border + (width - 2 * (pos_x + border)), pos_y + height - border),
+			(pos_x + border, pos_y + height - border)
+			), fill=255)
+
 	inner_width = inner_right - inner_left
-	# Room letter: align to the left side of the right block with some inset from inner_right
+
+	# room letter on the right side
 	right_block_margin = 22
 	label_x = inner_right - right_block_margin
 	label_y = pos_y + 6
 	if room_name is not None:
-		# single letter (first char)
 		rn = str(room_name).strip()
 		if len(rn) > 0:
 			rn = rn[0].upper()
@@ -152,28 +145,20 @@ def draw_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=No
 			rn = '?'
 		image_draw.text((label_x, label_y), rn, font=small_font, fill=0)
 
-	# Top-right: battery drawn as up to 4 small square boxes on the top of the box
+	# battery as a horizontal loading bar just below the top inner border
 	if battery_level is not None:
-		# horizontal loading bar placed inside the box just below the top border
-		# height equals the border thickness and starts directly after the left black border
-		bar_h = border
-		bar_padding = 1
-		# start exactly at the inner left (touching the inner border)
+		bar_h = max(3, border - 1)
 		bx = inner_left
-		# place just below the top black border (inside the white area)
-		by = pos_y + border
-		# width spans the inner area with minimal right margin
+		by = pos_y + border - 1
 		bar_w = inner_width - 2
-		draw_battery(image_draw, bx, by, battery_level, w=bar_w, h=bar_h, padding=bar_padding)
+		draw_battery(image_draw, bx, by, battery_level, w=bar_w, h=bar_h)
 
-	# Temperature: smaller than clock font and placed toward the left-middle of the top area
+	# temperature on the left/top area
 	if temp_c is not None:
-		# use a slightly smaller font for the temperature (reduce size by ~6)
 		try:
 			temp_font = ImageFont.truetype("./res/monofonto.otf", max(12, font.size - 6))
 		except Exception:
 			temp_font = small_font
-		# build parts to control spacing: integer, dot, fraction, degree, C
 		temp_str = f"{temp_c:.1f}"
 		if '.' in temp_str:
 			left, right = temp_str.split('.')
@@ -181,42 +166,33 @@ def draw_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=No
 			left, right = temp_str, ''
 		deg = '°'
 		unit = 'C'
-		# measure widths
 		left_w = temp_font.getlength(left)
 		dot_w = temp_font.getlength('.')
 		right_w = temp_font.getlength(right)
 		deg_w = temp_font.getlength(deg)
 		unit_w = temp_font.getlength(unit)
 		total_w = left_w + dot_w + right_w + deg_w + unit_w
-		# move temperature left a bit so it doesn't clash with the room letter on the right
 		tx_base = inner_left + int((inner_width - total_w) * 0.18)
-		ty = pos_y + 6 + 2  # move 2 px down for visual balance
-		# draw left part
+		ty = pos_y + 6 + 2
 		x = tx_base
 		image_draw.text((x, ty), left, font=temp_font, fill=0)
 		x += left_w
-		# draw dot slightly left (overlap) to reduce gap
 		overlap_dot = 2
 		image_draw.text((x - overlap_dot, ty), '.', font=temp_font, fill=0)
 		x = x - overlap_dot + dot_w
-		# draw fraction with slight overlap
 		overlap_frac = 2
 		image_draw.text((x - overlap_frac, ty), right, font=temp_font, fill=0)
 		x = x - overlap_frac + right_w
-		# draw degree symbol with small left overlap
 		overlap_deg = 2
 		image_draw.text((x - overlap_deg, ty), deg, font=temp_font, fill=0)
 		x = x - overlap_deg + deg_w
-		# draw unit 'C' with small left overlap
 		overlap_unit = 1
 		image_draw.text((x - overlap_unit, ty), unit, font=temp_font, fill=0)
 
-	# Humidity: bottom-right inside the box
+	# humidity bottom-right inside inner area
 	if humidity is not None:
-		# left-align humidity under the room letter with padding
 		hum_text = f"{int(humidity)}%"
 		hf_w = small_font.getlength(hum_text)
-		# ensure humidity text does not overflow into the right border
 		small_margin = 4
 		hx = label_x
 		if hx + hf_w > inner_right - small_margin:
@@ -225,33 +201,6 @@ def draw_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=No
 		image_draw.text((hx, hy), hum_text, font=small_font, fill=0)
 
 	return image_draw
-
-
-def draw_clock_box(image_draw, pos_y, height, text, font_obj=None):
-	"""Draw a full-black filled box (same shape as temp box) and center white text inside."""
-	pos_x = 0
-	width = epaper_size[0]
-	cut = 10
-	# draw outer filled polygon (completely black)
-	image_draw.polygon((
-		(pos_x, pos_y),
-		(pos_x + (width - 2 * pos_x) - cut, pos_y),
-		(pos_x + (width - 2 * pos_x), pos_y + cut),
-		(pos_x + (width - 2 * pos_x), pos_y + height),
-		(pos_x, pos_y + height)
-		), fill=0)
-	# center the text
-	f = font_obj or font
-	try:
-		txt_w = f.getlength(text)
-		tx = (width - txt_w) / 2
-		ty = pos_y + (height - f.size) / 2
-	except Exception:
-		tx = 8
-		ty = pos_y + 8
-	image_draw.text((tx, ty), text, font=f, fill=255)
-	return image_draw
-
 
 
 def render_once():
@@ -270,14 +219,12 @@ def render_once():
 	time_string = time.strftime('%H:%M')
 
 	box_y = 0
-	# First draw clock box with height 50
-	clock_h = 50
-	draw_box(display_draw, pos_y=box_y, height=clock_h, clock_text=time_string)
+	# First draw clock box using layout constants
+	draw_box(display_draw, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
 	# Draw four temp boxes below the clock box
-	box_h = 45
 	for i, r in enumerate(rooms):
-		y = box_y + clock_h + 6 + i * (box_h + 4)
-		draw_box(display_draw, pos_y=y, height=box_h, room_name=r['name'], temp_c=r['temp'], humidity=r['hum'], battery_level=r['bat'])
+		y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
+		draw_box(display_draw, pos_y=y, height=BOX_HEIGHT, room_name=r['name'], temp_c=r['temp'], humidity=r['hum'], battery_level=r['bat'])
 
 	# send to epaper
 	try:
@@ -303,6 +250,7 @@ def run_loop():
 	last_full_image = None
 
 	poll_interval = 5.0  # seconds between checks
+	partial_update_counter = 0
 	try:
 		while True:
 			now = time.time()
@@ -345,8 +293,33 @@ def run_loop():
 				last_full_image = full_image.copy()
 				last_values['minute'] = cur_min
 				last_values['rooms'] = rooms
+				# reset partial counter on full refresh
+				partial_update_counter = 0
 			else:
 				# minute didn't change -> check for per-room changes and send partial updates
+				# also attempt to update the clock area partially
+				try:
+					# create a partial image containing only the clock box
+					clock_partial = Image.new('1', epaper_size, 255)
+					clock_draw = ImageDraw.Draw(clock_partial)
+					box_y = 0
+					draw_box(clock_draw, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time.strftime('%H:%M'))
+					did_clock_partial = False
+					if hasattr(epd, 'display_partial'):
+						try:
+							epd.display_partial(epd.getbuffer(clock_partial), x=0, y=box_y, w=epaper_size[0], h=CLOCK_HEIGHT)
+							did_clock_partial = True
+						except TypeError:
+							epd.display_partial(epd.getbuffer(clock_partial))
+							did_clock_partial = True
+					elif hasattr(epd, 'displayPartial'):
+						epd.displayPartial(epd.getbuffer(clock_partial))
+						did_clock_partial = True
+					if did_clock_partial:
+						partial_update_counter += 1
+				except Exception:
+					# ignore partial clock failures and continue
+					pass
 				for i, r in enumerate(rooms):
 					prev = last_values['rooms'][i] if i < len(last_values['rooms']) else None
 					changed = False
@@ -365,7 +338,7 @@ def run_loop():
 						box_y = 0
 						clock_h = 50
 						box_h = 45
-						y = box_y + clock_h + 6 + i * (box_h + 4)
+						y = box_y + clock_h + 4 + i * (box_h + 4)
 						# create a partial image the same size as full screen but only draw the affected box
 						partial_image = Image.new('1', epaper_size, 255)
 						partial_drawer = ImageDraw.Draw(partial_image)
@@ -396,10 +369,14 @@ def run_loop():
 								last_full_image.paste(partial_image, (0, 0))
 								epd.display(epd.getbuffer(last_full_image))
 								epd.sleep()
+								# count this as a partial update (we displayed a composite)
+								partial_update_counter += 1
 							except Exception:
 								try:
 									epd.display(epd.getbuffer(partial_image))
 									epd.sleep()
+									# even this fallback counts as a partial attempt
+									partial_update_counter += 1
 								except Exception:
 									pass
 
@@ -408,6 +385,32 @@ def run_loop():
 							last_values['rooms'][i] = r
 						else:
 							last_values['rooms'].append(r)
+
+			# if we've reached the partial-update threshold, force a full refresh
+			if partial_update_counter >= FULL_UPDATE_AFTER_PARTIALS:
+				try:
+					full_image = Image.new('1', epaper_size, 255)
+					full_drawer = ImageDraw.Draw(full_image)
+					time_string = time.strftime('%H:%M')
+					box_y = 0
+					draw_box(full_drawer, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
+					for i, room in enumerate(rooms):
+						y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
+						draw_box(full_drawer, pos_y=y, height=BOX_HEIGHT, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
+					if epaper is not None:
+						epd.init()
+					epd.display(epd.getbuffer(full_image))
+					epd.sleep()
+				except Exception:
+					try:
+						epd.display(epd.getbuffer(full_image))
+						epd.sleep()
+					except Exception:
+						pass
+				# update stored state and reset counter
+				last_full_image = full_image.copy()
+				last_values['rooms'] = rooms
+				partial_update_counter = 0
 
 			time.sleep(poll_interval)
 	except KeyboardInterrupt:
