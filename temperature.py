@@ -126,7 +126,8 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 			h = epaper_size[1]
 
 		# Prefer a low-level partial update using Waveshare methods if available
-		if all(hasattr(epd, name) for name in ('set_windows', 'set_cursor', 'send_data2', 'ondisplay')):
+		if (all(hasattr(epd, name) for name in ('SetWindow', 'SetCursor', 'send_data2', 'TurnOnDisplayPart'))
+				or all(hasattr(epd, name) for name in ('set_windows', 'set_cursor', 'send_data2', 'ondisplay'))):
 			try:
 				# crop region from image to minimal buffer
 				region = pil_image.crop((x, y, x + w, y + h)).convert('1')
@@ -140,39 +141,45 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 					rw = region.size[0]
 				buf = bytearray(region.tobytes())
 
-				print(f"_send_partial: using low-level set_windows x={x} y={y} w={w} h={h} buf_len={len(buf)}")
+				print(f"_send_partial: using low-level window API x={x} y={y} w={w} h={h} buf_len={len(buf)}")
 
-				# set window and cursor and send data
-				epd.set_windows(x, y, x + w - 1, y + h - 1)
-				epd.set_cursor(x, y)
-				epd.send_data2(buf)
-				# Try to trigger a partial refresh using common Waveshare sequence
+				# call the appropriate window/set cursor functions depending on the driver
 				try:
-					if hasattr(epd, 'send_command') and hasattr(epd, 'send_data'):
-						print("_send_partial: trying 0x22/0x20 partial update sequence")
+					if hasattr(epd, 'SetWindow') and hasattr(epd, 'SetCursor'):
+						epd.SetWindow(x, y, x + w - 1, y + h - 1)
+						epd.SetCursor(x, y)
+					else:
+						epd.set_windows(x, y, x + w - 1, y + h - 1)
+						epd.set_cursor(x, y)
+
+					# write black RAM (0x24) then data
+					try:
+						epd.send_command(0x24)
+					except Exception:
+						pass
+					epd.send_data2(buf)
+
+					# trigger a PARTIAL update using available method
+					if hasattr(epd, 'TurnOnDisplayPart'):
 						try:
-							epd.send_command(0x22)
-							# 0xC7 is a commonly used display update control value for partial
-							epd.send_data(0xC7)
-							epd.send_command(0x20)
+							epd.TurnOnDisplayPart()
 							if hasattr(epd, 'busy'):
 								epd.busy()
 							return True
 						except Exception as e:
-							print("_send_partial: 0x22/0x20 sequence failed:", e)
-							# fallthrough to ondisplay
-							pass
-				except Exception:
+							print("_send_partial: TurnOnDisplayPart failed:", e)
+					# try older ondisplay if present
+					if hasattr(epd, 'ondisplay'):
+						try:
+							epd.ondisplay()
+							return True
+						except Exception as e:
+							print("_send_partial: epd.ondisplay failed:", e)
+					return True
+				except Exception as e:
+					print("_send_partial: low-level window API failed:", e)
+					# fallthrough to other partial APIs
 					pass
-				# fallback to ondisplay if available
-				if hasattr(epd, 'ondisplay'):
-					try:
-						epd.ondisplay()
-						return True
-					except Exception as e:
-						print("_send_partial: epd.ondisplay failed:", e)
-						return False
-				return True
 			except Exception as e:
 				print("_send_partial: low-level partial failed:", e)
 				# fallthrough to other partial APIs
