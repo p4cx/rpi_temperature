@@ -423,6 +423,9 @@ def run_loop():
 					# update stored values
 					last_values['minute'] = cur_min
 					last_values['rooms'] = rooms
+					# after doing the minute-change partial updates, reset the partial counter
+					# so we don't trigger a full refresh immediately
+					partial_update_counter = 0
 			else:
 				# minute didn't change -> check for per-room changes and send partial updates
 				# also attempt to update the clock area partially
