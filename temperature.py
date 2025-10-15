@@ -49,7 +49,6 @@ else:
 						image = None
 				if image is not None:
 					fname = time.strftime('res/preview/preview_%Y%m%d_%H%M%S.png')
-					# convert to RGB so PNG viewers render correctly
 					image.convert('RGB').save(fname)
 					print(f"DummyEPD.display() saved preview to {fname}")
 				else:
@@ -58,7 +57,6 @@ else:
 				print("DummyEPD.display() error:", e)
 			return
 		def getbuffer(self, pil_image):
-			# Return the PIL Image directly so display can save it for preview
 			try:
 				return pil_image
 			except Exception:
@@ -70,317 +68,7 @@ else:
 	epd.init()
 	epd.Clear(0xFF)
 
-# Helper to send buffers to various epd driver signatures
-def _send_to_epd(pil_image):
-	"""Send a PIL image to the epd using the driver's available display API.
-	Tries epd.display(black, red) then epd.display(buffer). Works with DummyEPD and
-	Waveshare drivers that expect raw buffers.
-	Returns True on success, False otherwise.
-	"""
-	try:
-		buf = epd.getbuffer(pil_image)
-	except Exception:
-		print("_send_to_epd: epd.getbuffer failed")
-		return False
-
-	# If the driver returned a PIL image (DummyEPD), prefer sending that directly
-	try:
-		# Try two-argument display (black, red)
-		try:
-			# create a blank buffer only if buf is a bytes-like sequence
-			if isinstance(buf, (bytes, bytearray)):
-				blank = bytearray([0xFF]) * len(buf)
-				print(f"_send_to_epd: using epd.display(buf, blank), buf_len={len(buf)}")
-				epd.display(buf, blank)
-			else:
-				# assume driver will error on two args for PIL-backed DummyEPD
-				print("_send_to_epd: using epd.display(buf, buf) with non-bytes buf")
-				epd.display(buf, buf)
-			return True
-		except TypeError:
-			# driver expects a single buffer or PIL image
-			try:
-				print("_send_to_epd: falling back to epd.display(buf)")
-				epd.display(buf)
-				return True
-			except Exception as e:
-				print("_send_to_epd: epd.display(buf) failed:", e)
-				import traceback
-				traceback.print_exc()
-				# try to re-init the driver and try again once
-				try:
-					epd.init()
-					print("_send_to_epd: epd.init() called after display failure, retrying display")
-					epd.display(buf)
-					return True
-				except Exception as e2:
-					print("_send_to_epd: retry epd.display after init failed:", e2)
-					traceback.print_exc()
-					# final fallback
-					try:
-						epd.display(pil_image)
-						return True
-					except Exception:
-						return False
-	except Exception:
-		# final fallback: try single-arg display with the original pil_image
-		try:
-			epd.display(pil_image)
-			return True
-		except Exception:
-			return False
-
-
-def _send_partial(pil_image, x=0, y=0, w=None, h=None):
-	"""Try to send only a region to the display using common driver partial APIs.
-	If no partial API is available, fallback to sending the full image via _send_to_epd.
-	"""
-	try:
-		if w is None:
-			w = epaper_size[0]
-		if h is None:
-			h = epaper_size[1]
-
-		# Assume the driver is initialized already (calling epd.init() here can reset display state)
-		print("_send_partial: assuming epd already initialized")
-
-		# crop region from image to minimal buffer
-		region = pil_image.crop((x, y, x + w, y + h)).convert('1')
-		# First prefer driver convenience partial methods when available
-		try:
-			if hasattr(epd, 'display_partial'):
-				print(f"_send_partial: trying epd.display_partial x={x} y={y} w={w} h={h}")
-				try:
-					epd.display_partial(epd.getbuffer(pil_image), x=x, y=y, w=w, h=h)
-					return True
-				except TypeError:
-					# some drivers accept only buffer
-					try:
-						epd.display_partial(epd.getbuffer(pil_image))
-						return True
-					except OSError as ose:
-						if getattr(ose, 'errno', None) == 9:
-							print("_send_partial: display_partial raised Errno 9, attempting epd.init() and retry")
-							try:
-								epd.init()
-								epd.display_partial(epd.getbuffer(pil_image), x=x, y=y, w=w, h=h)
-								return True
-							except Exception:
-								pass
-						# fallthrough to other methods
-					except Exception:
-						# other errors, fallthrough
-						pass
-			if hasattr(epd, 'displayPartial'):
-				print("_send_partial: trying epd.displayPartial")
-				try:
-					epd.displayPartial(epd.getbuffer(pil_image))
-					return True
-				except OSError as ose:
-					if getattr(ose, 'errno', None) == 9:
-						print("_send_partial: displayPartial raised Errno 9, attempting epd.init() and retry")
-						try:
-							epd.init()
-							epd.displayPartial(epd.getbuffer(pil_image))
-							return True
-						except Exception:
-							pass
-		except Exception:
-			# fallthrough to low-level window API if convenience methods fail
-			pass
-
-		# If convenience methods were not used/successful, try low-level windowed writes
-		if (all(hasattr(epd, name) for name in ('SetWindow', 'SetCursor', 'send_data2', 'TurnOnDisplayPart'))
-				or all(hasattr(epd, name) for name in ('set_windows', 'set_cursor', 'send_data2', 'ondisplay'))):
-			try:
-				# region already prepared
-				rw, rh = region.size
-				# pad width to byte boundary
-				line_bytes = (rw + 7) // 8
-				if rw % 8 != 0:
-					padded = Image.new('1', (line_bytes * 8, rh), 255)
-					padded.paste(region, (0, 0))
-					region = padded
-					rw = region.size[0]
-				buf = bytearray(region.tobytes())
-
-				print(f"_send_partial: using low-level window API x={x} y={y} w={w} h={h} buf_len={len(buf)}")
-
-				# call the appropriate window/set cursor functions depending on the driver
-				try:
-					if hasattr(epd, 'SetWindow') and hasattr(epd, 'SetCursor'):
-						epd.SetWindow(x, y, x + w - 1, y + h - 1)
-						epd.SetCursor(x, y)
-					else:
-						epd.set_windows(x, y, x + w - 1, y + h - 1)
-						epd.set_cursor(x, y)
-
-					# write black RAM (0x24) then data
-					try:
-						epd.send_command(0x24)
-					except Exception:
-						pass
-					# For windowed low-level writes, we must send data in the driver's expected format.
-					# If the driver provides getbuffer for full images, use it and slice out the region bytes per row
-					used_buf = None
-					try:
-						if hasattr(epd, 'getbuffer'):
-							full_buf_img = Image.new('1', epaper_size, 255)
-							full_buf_img.paste(region, (x, y))
-							full_buf = epd.getbuffer(full_buf_img)
-							if isinstance(full_buf, (bytes, bytearray)) and len(full_buf) >= 1:
-								# compute bytes per full-line and per-region-line
-								full_line_bytes = (epaper_size[0] + 7) // 8
-								region_line_bytes = (rw + 7) // 8
-								x_byte = x // 8
-								parts = []
-								for row in range(rh):
-									start = row * full_line_bytes + x_byte
-									parts.append(full_buf[start:start + region_line_bytes])
-								used_buf = b''.join(parts)
-								print("_send_partial: using driver-formatted slice from full buffer, len=", len(used_buf))
-					except Exception as e:
-						print("_send_partial: slicing driver full buffer failed:", e)
-					if used_buf is None:
-						# fallback to the raw region bytes padded to byte boundary
-						used_buf = bytes(buf)
-						print("_send_partial: falling back to raw region.tobytes() as buffer for windowed write, len=", len(used_buf))
-
-					# Some drivers choke on large SPI bursts. Send in small chunks and prefer send_data if available.
-					import errno as _errno
-					writer = None
-					if hasattr(epd, 'send_data'):
-						writer = epd.send_data
-					elif hasattr(epd, 'send_data2'):
-						writer = epd.send_data2
-					else:
-						writer = None
-
-					def _chunked_write(buf_bytes, write_func):
-						chunk = 256
-						for i in range(0, len(buf_bytes), chunk):
-							part = buf_bytes[i:i+chunk]
-							write_func(part)
-							# tiny pause to avoid overwhelming SPI
-							time.sleep(0.01)
-
-					try:
-						if writer is not None:
-							_chunked_write(used_buf, writer)
-						else:
-							# last-resort: try send_data2 attribute directly
-							epd.send_data2(used_buf)
-					except OSError as ose:
-						if getattr(ose, 'errno', None) == _errno.EBADF or getattr(ose, 'errno', None) == 9:
-							print("_send_partial: low-level window API OSError Errno 9 (Bad file descriptor):", ose)
-							try:
-								print("_send_partial: attempting epd.init() to recover SPI and then falling back to full send")
-								epd.init()
-								_send_to_epd(pil_image)
-								try:
-									epd.sleep()
-								except Exception:
-									pass
-								return True
-							except Exception as reinit_e:
-								print("_send_partial: epd.init() during recovery failed:", reinit_e)
-								# allow fallthrough to try inverted buffer
-						# otherwise, try inverted buffer with same strategy
-						try:
-							inv = bytes((b ^ 0xFF) for b in used_buf)
-							if writer is not None:
-								_chunked_write(inv, writer)
-							else:
-								epd.send_data2(inv)
-							print("_send_partial: send succeeded with inverted buffer")
-						except Exception as e2:
-							print("_send_partial: send_data inverted also failed:", e2)
-							raise
-					except Exception as e:
-						print("_send_partial: send_data write failed:", e)
-						try:
-							inv = bytes((b ^ 0xFF) for b in used_buf)
-							if writer is not None:
-								_chunked_write(inv, writer)
-							else:
-								epd.send_data2(inv)
-							print("_send_partial: send succeeded with inverted buffer (second try)")
-						except Exception as e2:
-							print("_send_partial: inverted send also failed:", e2)
-							raise
-
-					# trigger a PARTIAL update using available method
-					if hasattr(epd, 'TurnOnDisplayPart'):
-						try:
-							epd.TurnOnDisplayPart()
-							if hasattr(epd, 'busy'):
-								epd.busy()
-							return True
-						except Exception as e:
-							print("_send_partial: TurnOnDisplayPart failed:", e)
-					# try older ondisplay if present
-					if hasattr(epd, 'ondisplay'):
-						try:
-							epd.ondisplay()
-							return True
-						except Exception as e:
-							print("_send_partial: epd.ondisplay failed:", e)
-					return True
-				except Exception as e:
-					import traceback
-					print("_send_partial: low-level window API failed:", e)
-					traceback.print_exc()
-					# fallthrough to other partial APIs
-					pass
-			except Exception as e:
-				import traceback
-				print("_send_partial: low-level partial failed:", e)
-				traceback.print_exc()
-				# fallthrough to other partial APIs
-				pass
-
-		# driver-level convenience methods
-		if hasattr(epd, 'display_partial'):
-			try:
-				print(f"_send_partial: using epd.display_partial x={x} y={y} w={w} h={h}")
-				epd.display_partial(epd.getbuffer(pil_image), x=x, y=y, w=w, h=h)
-				return True
-			except TypeError:
-				print("_send_partial: display_partial accepted only buffer")
-				epd.display_partial(epd.getbuffer(pil_image))
-				return True
-
-		if hasattr(epd, 'displayPartial'):
-			print("_send_partial: using epd.displayPartial")
-			epd.displayPartial(epd.getbuffer(pil_image))
-			return True
-	except Exception as e:
-		print("_send_partial: driver partial attempts raised:", e)
-		# ignore and fallback
-		pass
-
-	# fallback to full send
-	print("_send_partial: falling back to full send")
-	return _send_to_epd(pil_image)
-
-def draw_battery(draw, x, y, level, w=100, h=4):
-	fill_pct = 0
-	try:
-		lvl = float(level)
-		fill_pct = int(max(0, min(100, lvl)))
-	except Exception:
-		fill_pct = 0
-	fill_w = int(w * (fill_pct / 100.0))
-	if fill_w > 0:
-		draw.rectangle((x, y + (h - (h))//2, x + fill_w, y + h - (h)//2), outline=0, fill=0)
-
-
 def draw_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=None, battery_level=0, clock_text=None):
-	"""Draw a single box at vertical position pos_y with given height.
-	If clock_text is provided, draw a black clock box with centered white text.
-	Otherwise draw a framed box (black outer, white inner) and render room letter, battery bar,
-	temperature (left) and humidity (bottom/right).
-	"""
 	width = epaper_size[0]
 	pos_x = 0
 	# simple frame parameters
@@ -442,7 +130,15 @@ def draw_box(image_draw, pos_y, height, room_name=None, temp_c=None, humidity=No
 		bx = inner_left
 		by = pos_y + border - 1
 		bar_w = inner_width - 2
-		draw_battery(image_draw, bx, by, battery_level, w=bar_w, h=bar_h)
+		fill_pct = 0
+		try:
+			lvl = float(battery_level)
+			fill_pct = int(max(0, min(100, lvl)))
+		except Exception:
+			fill_pct = 0
+		fill_w = int(bar_w * (fill_pct / 100.0))
+		if fill_w > 0:
+			image_draw.rectangle((bx, by + (bar_h - (bar_h))//2, bx + fill_w, by + bar_h - (bar_h)//2), outline=0, fill=0)
 
 	# temperature on the left/top area
 	if temp_c is not None:
@@ -519,17 +215,10 @@ def render_once():
 
 	# send to epaper
 	try:
-		if epaper is not None:
-			epd.init()
-		_send_to_epd(display_image)
+		epd.display(epd.getbuffer(display_image))
 		epd.sleep()
 	except Exception:
-		# Ensure dummy still tries to display
-		try:
-			epd.display(epd.getbuffer(display_image))
-			epd.sleep()
-		except Exception:
-			pass
+		pass
 
 
 def run_loop():
@@ -556,206 +245,21 @@ def run_loop():
 			]
 
 			if last_values['minute'] != cur_min:
-				# minute changed -> do minimal partial updates: clock + only changed room boxes
-				# If we don't have a last_full_image yet, render and send it fully once
-				if last_full_image is None:
-					full_image = Image.new('1', epaper_size, 255)
-					full_drawer = ImageDraw.Draw(full_image)
-					time_string = time.strftime('%H:%M')
-					box_y = 0
-					draw_box(full_drawer, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
-					for i, room in enumerate(rooms):
-						y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
-						draw_box(full_drawer, pos_y=y, height=BOX_HEIGHT, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
-					# send full image once (initialization)
-					try:
-						if epaper is not None:
-							epd.init()
-							_send_to_epd(full_image)
-							epd.sleep()
-					except Exception:
-						try:
-							_send_to_epd(full_image)
-							epd.sleep()
-						except Exception:
-							pass
-					last_full_image = full_image.copy()
-					last_values['minute'] = cur_min
-					last_values['rooms'] = rooms
-					partial_update_counter = 0
-				else:
-					# partial-update the clock area
-					try:
-						box_y = 0
-						clock_partial = Image.new('1', epaper_size, 255)
-						clock_draw = ImageDraw.Draw(clock_partial)
-						time_string = time.strftime('%H:%M')
-						draw_box(clock_draw, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
-						sent = _send_partial(clock_partial, x=0, y=box_y, w=epaper_size[0], h=CLOCK_HEIGHT)
-						# update stored full image only if partial send succeeded
-						if sent:
-							if last_full_image is None:
-								last_full_image = Image.new('1', epaper_size, 255)
-							mask = clock_partial.convert('L').point(lambda p: 255 - p)
-							last_full_image.paste(clock_partial, (0, 0), mask)
-							partial_update_counter += 1
-					except Exception:
-						pass
-					# partial-update only rooms that changed
-					for i, room in enumerate(rooms):
-						prev = last_values['rooms'][i] if i < len(last_values['rooms']) else None
-						room_changed = False
-						if prev is None:
-							room_changed = True
-						else:
-							if abs(prev.get('temp', 0) - room.get('temp', 0)) > 0.05:
-								room_changed = True
-							if prev.get('hum') != room.get('hum'):
-								room_changed = True
-							if prev.get('bat') != room.get('bat'):
-								room_changed = True
-						if room_changed:
-							try:
-								box_y = 0
-								y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
-								partial_image = Image.new('1', epaper_size, 255)
-								partial_drawer = ImageDraw.Draw(partial_image)
-								draw_box(partial_drawer, pos_y=y, height=BOX_HEIGHT, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
-								sent = _send_partial(partial_image, x=0, y=y, w=epaper_size[0], h=BOX_HEIGHT)
-								# update stored full image only if send succeeded
-								if sent:
-									if last_full_image is None:
-										last_full_image = Image.new('1', epaper_size, 255)
-									mask = partial_image.convert('L').point(lambda p: 255 - p)
-									last_full_image.paste(partial_image, (0, 0), mask)
-									partial_update_counter += 1
-							except Exception:
-								pass
-					# update stored values
-					last_values['minute'] = cur_min
-					last_values['rooms'] = rooms
-					# after doing the minute-change partial updates, reset the partial counter
-					# so we don't trigger a full refresh immediately
-					partial_update_counter = 0
-			else:
-				# minute didn't change -> check for per-room changes and send partial updates
-				# also attempt to update the clock area partially
-				try:
-					# create a partial image containing only the clock box
-					clock_partial = Image.new('1', epaper_size, 255)
-					clock_draw = ImageDraw.Draw(clock_partial)
-					box_y = 0
-					draw_box(clock_draw, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time.strftime('%H:%M'))
-					did_clock_partial = False
-					if hasattr(epd, 'display_partial'):
-						try:
-							epd.display_partial(epd.getbuffer(clock_partial), x=0, y=box_y, w=epaper_size[0], h=CLOCK_HEIGHT)
-							did_clock_partial = True
-						except TypeError:
-							epd.display_partial(epd.getbuffer(clock_partial))
-							did_clock_partial = True
-					elif hasattr(epd, 'displayPartial'):
-						epd.displayPartial(epd.getbuffer(clock_partial))
-						did_clock_partial = True
-					if did_clock_partial:
-						partial_update_counter += 1
-				except Exception:
-					# ignore partial clock failures and continue
-					pass
-				for i, r in enumerate(rooms):
-					prev = last_values['rooms'][i] if i < len(last_values['rooms']) else None
-					changed = False
-					if prev is None:
-						changed = True
-					else:
-						# compare relevant fields (temp, hum, bat)
-						if abs(prev.get('temp', 0) - r.get('temp', 0)) > 0.05:
-							changed = True
-						if prev.get('hum') != r.get('hum'):
-							changed = True
-						if prev.get('bat') != r.get('bat'):
-							changed = True
-					if changed:
-						# compute box position
-						box_y = 0
-						y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
-						# create a partial image the same size as full screen but only draw the affected box
-						partial_image = Image.new('1', epaper_size, 255)
-						partial_drawer = ImageDraw.Draw(partial_image)
-						draw_box(partial_drawer, pos_y=y, height=BOX_HEIGHT, room_name=r['name'], temp_c=r['temp'], humidity=r['hum'], battery_level=r['bat'])
-
-						# try hardware partial update methods if available
-						did_partial = False
-						try:
-							if hasattr(epd, 'display_partial'):
-								try:
-									epd.display_partial(epd.getbuffer(partial_image), x=0, y=y, w=epaper_size[0], h=BOX_HEIGHT)
-									did_partial = True
-								except TypeError:
-									# some drivers accept only buffer
-									epd.display_partial(epd.getbuffer(partial_image))
-									did_partial = True
-							elif hasattr(epd, 'displayPartial'):
-								epd.displayPartial(epd.getbuffer(partial_image))
-								did_partial = True
-						except Exception:
-							did_partial = False
-
-						if not did_partial:
-							# fallback: composite onto last_full_image and send full buffer
-							if last_full_image is None:
-								last_full_image = Image.new('1', epaper_size, 255)
-							try:
-								# paste only non-white pixels so the stored full image isn't erased
-								mask = partial_image.convert('L').point(lambda p: 255 - p)
-								last_full_image.paste(partial_image, (0, 0), mask)
-								_send_to_epd(last_full_image)
-								epd.sleep()
-								# count this as a partial update (we displayed a composite)
-								partial_update_counter += 1
-							except Exception:
-								try:
-									epd.init()
-									_send_to_epd(partial_image)
-									epd.sleep()
-									# even this fallback counts as a partial attempt
-									partial_update_counter += 1
-								except Exception:
-									pass
-
-						# update stored value
-						if i < len(last_values['rooms']):
-							last_values['rooms'][i] = r
-						else:
-							last_values['rooms'].append(r)
-
-			# if we've reached the partial-update threshold, force a full refresh
-			if partial_update_counter >= FULL_UPDATE_AFTER_PARTIALS:
-				try:
-					full_image = Image.new('1', epaper_size, 255)
-					full_drawer = ImageDraw.Draw(full_image)
-					time_string = time.strftime('%H:%M')
-					box_y = 0
-					draw_box(full_drawer, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
-					for i, room in enumerate(rooms):
-						y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
-						draw_box(full_drawer, pos_y=y, height=BOX_HEIGHT, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
-					if epaper is not None:
-						epd.init()
-						_send_to_epd(full_image)
-						epd.sleep()
-				except Exception:
-					try:
-						epd.display(epd.getbuffer(full_image))
-						epd.sleep()
-					except Exception:
-						pass
-				# update stored state and reset counter
-				last_full_image = full_image.copy()
+				full_image = Image.new('1', epaper_size, 255)
+				full_drawer = ImageDraw.Draw(full_image)
+				time_string = time.strftime('%H:%M')
+				box_y = 0
+				draw_box(full_drawer, pos_y=box_y, height=CLOCK_HEIGHT, clock_text=time_string)
+				for i, room in enumerate(rooms):
+					y = box_y + CLOCK_HEIGHT + GAP_AFTER_CLOCK + i * (BOX_HEIGHT + INTER_BOX_GAP)
+					draw_box(full_drawer, pos_y=y, height=BOX_HEIGHT, room_name=room['name'], temp_c=room['temp'], humidity=room['hum'], battery_level=room['bat'])
 				last_values['rooms'] = rooms
-				partial_update_counter = 0
+				try:
+					epd.display(epd.getbuffer(full_image))
+					epd.sleep()
+				except Exception:
+					pass
 
-			time.sleep(poll_interval)
 	except KeyboardInterrupt:
 		try:
 			epd.sleep()
