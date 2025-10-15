@@ -468,7 +468,9 @@ def run_loop():
 						# always update stored full image so our state stays consistent
 						if last_full_image is None:
 							last_full_image = Image.new('1', epaper_size, 255)
-						last_full_image.paste(clock_partial, (0, 0))
+							# paste only non-white pixels so we don't erase existing content on failed/partial updates
+							mask = clock_partial.convert('L').point(lambda p: 255 - p)
+							last_full_image.paste(clock_partial, (0, 0), mask)
 						if sent:
 							partial_update_counter += 1
 					except Exception:
@@ -497,7 +499,9 @@ def run_loop():
 								# always update stored full image
 								if last_full_image is None:
 									last_full_image = Image.new('1', epaper_size, 255)
-								last_full_image.paste(partial_image, (0, 0))
+								# paste only non-white pixels to avoid wiping existing display state
+								mask = partial_image.convert('L').point(lambda p: 255 - p)
+								last_full_image.paste(partial_image, (0, 0), mask)
 								if sent:
 									partial_update_counter += 1
 							except Exception:
