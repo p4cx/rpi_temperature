@@ -180,10 +180,31 @@ def _send_partial(pil_image, x=0, y=0, w=None, h=None):
 						epd.send_command(0x24)
 					except Exception:
 						pass
-					# For windowed low-level writes, the driver expects region-sized data matching SetWindow.
-					# Use the region-derived buffer (padded to byte boundary) as the canonical payload.
-					used_buf = bytes(buf)
-					print("_send_partial: using raw region.tobytes() as buffer for windowed write, len=", len(used_buf))
+					# For windowed low-level writes, we must send data in the driver's expected format.
+					# If the driver provides getbuffer for full images, use it and slice out the region bytes per row
+					used_buf = None
+					try:
+						if hasattr(epd, 'getbuffer'):
+							full_buf_img = Image.new('1', epaper_size, 255)
+							full_buf_img.paste(region, (x, y))
+							full_buf = epd.getbuffer(full_buf_img)
+							if isinstance(full_buf, (bytes, bytearray)) and len(full_buf) >= 1:
+								# compute bytes per full-line and per-region-line
+								full_line_bytes = (epaper_size[0] + 7) // 8
+								region_line_bytes = (rw + 7) // 8
+								x_byte = x // 8
+								parts = []
+								for row in range(rh):
+									start = row * full_line_bytes + x_byte
+									parts.append(full_buf[start:start + region_line_bytes])
+								used_buf = b''.join(parts)
+								print("_send_partial: using driver-formatted slice from full buffer, len=", len(used_buf))
+					except Exception as e:
+						print("_send_partial: slicing driver full buffer failed:", e)
+					if used_buf is None:
+						# fallback to the raw region bytes padded to byte boundary
+						used_buf = bytes(buf)
+						print("_send_partial: falling back to raw region.tobytes() as buffer for windowed write, len=", len(used_buf))
 
 					# Some drivers expect inverted bits; try sending raw first, then inverted if behavior wrong.
 					try:
