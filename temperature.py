@@ -12,27 +12,25 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_loop(debug=False, once=False):
-    first_preview = True
+def run_loop(debug):
     try:
         while True:
             flight = get_flight_data()
             weather = get_outside_weather()
             sensors = get_inside_sensors()
             image = build_image(flight, weather, sensors)
-            if debug and first_preview:
+            if debug:
                 save_preview(image)
-                first_preview = False
-            send(image)
-            if once:
+                print('Debug mode: exiting after saving preview')
                 break
-            time.sleep(60)
+            else:
+                send(image)
+                time.sleep(60)
     except KeyboardInterrupt:
         print("Exiting")
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    run_loop(debug=args.debug, once=args.once)
+    run_loop(debug=True)
 
 

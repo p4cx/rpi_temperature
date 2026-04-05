@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 FONT_PATH = "./res/PixelOperator8.ttf"
 EPAPER_SIZE = (122, 250)
 CLOCK_HEIGHT = 42
+BORDER = 4
 GAP_AFTER_CLOCK = 3
 FLIGHT_BOX_HEIGHT = 54
 WEATHER_BOX_HEIGHT = 38
@@ -33,8 +34,6 @@ def _text_size(text, font):
 
 font = _load_font(FONT_PATH, 24)
 small_font = _load_font(FONT_PATH, 8)
-tiny_font = _load_font(FONT_PATH, 7)
-
 
 class DummyEPD:
     def init(self):
@@ -49,9 +48,6 @@ class DummyEPD:
         if image is None:
             print("DummyEPD.display() could not convert buffer")
             return
-        fname = time.strftime(f"{PREVIEW_DIR}/preview_%Y%m%d_%H%M%S.png")
-        image.convert("RGB").save(fname)
-        print(f"DummyEPD.display() saved preview to {fname}")
 
     def getbuffer(self, image):
         return image
@@ -68,124 +64,107 @@ def _to_image(buffer):
 
 
 def init_epd():
-    if epaper is not None:
-        ed = epaper.epaper("epd2in13_V4").EPD()
-        ed.init()
-        ed.Clear(0xFF)
-        try:
-            attrs = sorted(dir(ed))
-            print("EPD attributes:\n" + "\n".join(attrs))
-        except Exception as exc:
-            print("Could not list epd attributes:", exc)
-        return ed
-    return DummyEPD()
+    if epaper is None:
+        return DummyEPD()
+
+    ed = epaper.epaper("epd2in13_V4").EPD()
+    ed.init()
+    ed.Clear(0xFF)
+    try:
+        attrs = sorted(dir(ed))
+        print("EPD attributes:\n" + "\n".join(attrs))
+    except Exception as exc:
+        print("Could not list epd attributes:", exc)
+    return ed
 
 
 epd = init_epd()
-
-
-def _center_text(text, font, width, top, height):
-    text_width, text_height = _text_size(text, font)
-    x = (width - text_width) / 2
-    y = top + (height - text_height) / 2
-    return x, y
 
 
 def _draw_box_border(draw, top, height, fill=0):
     width = EPAPER_SIZE[0]
     cut = 10
     outer = [(0, top), (width - cut, top), (width, top + cut), (width, top + height), (0, top + height)]
-    draw.polygon(outer, fill=fill)
+    draw.polygon(outer, fill=0)
+    inner = [
+        (BORDER, top + BORDER),
+        (EPAPER_SIZE[0] - BORDER - cut + 2 , top + BORDER),
+        (EPAPER_SIZE[0] - BORDER, top + cut + BORDER - 2),
+        (EPAPER_SIZE[0] - BORDER, top + height - BORDER),
+        (BORDER, top + height - BORDER),
+    ]
+    draw.polygon(inner, fill=fill)
 
 
-def draw_clock_box(draw, top, height, clock_text):
+def draw_clock_box(draw, top, height, clock_text, date_text):
     _draw_box_border(draw, top, height, fill=0)
-    x, y = _center_text(clock_text, font, EPAPER_SIZE[0], top, height)
-    draw.text((x, y), clock_text, font=font, fill=255)
+    draw.text((0, top + 6), clock_text, font=font, fill=255)
+    draw.text((BORDER + 2, top + 30), date_text, font=small_font, fill=255)
 
 
 def draw_flight_box(draw, top, height, flight):
-    _draw_box_border(draw, top, height, fill=0)
-    border = 4
-    cut = 10
-    inner = [
-        (border, top + border),
-        (EPAPER_SIZE[0] - border - cut, top + border),
-        (EPAPER_SIZE[0] - border, top + cut + border // 2),
-        (EPAPER_SIZE[0] - border, top + height - border),
-        (border, top + height - border),
-    ]
-    draw.polygon(inner, fill=255)
+    _draw_box_border(draw, top, height, fill=255)
+    if flight.get("error"):
+        draw.text((BORDER + 2, top + 4), "FLIGHT ERROR", font=small_font, fill=0)
+        draw.text((BORDER + 2, top + 18), flight["error"][:18], font=small_font, fill=0)
+        return
+
     flight_number = flight.get("flight_number", "N/A")
-    draw.text((border + 2, top + 4), flight_number, font=small_font, fill=0)
+    draw.text((BORDER + 2, top + 4), flight_number, font=small_font, fill=0)
     dep = flight.get("dep_city", "Depart")
     dep_country = flight.get("dep_country", "")
     arr = flight.get("arr_city", "Arrive")
     arr_country = flight.get("arr_country", "")
-    draw.text((border + 2, top + 18), f"{dep}, {dep_country}", font=tiny_font, fill=0)
-    draw.text((border + 2, top + 28), f"{arr}, {arr_country}", font=tiny_font, fill=0)
+    draw.text((BORDER + 2, top + 18), f"{dep}, {dep_country}", font=small_font, fill=0)
+    draw.text((BORDER + 2, top + 28), f"{arr}, {arr_country}", font=small_font, fill=0)
 
 
 def draw_weather_box(draw, top, height, weather):
-    _draw_box_border(draw, top, height, fill=0)
-    border = 4
-    cut = 10
-    inner = [
-        (border, top + border),
-        (EPAPER_SIZE[0] - border - cut, top + border),
-        (EPAPER_SIZE[0] - border, top + cut + border // 2),
-        (EPAPER_SIZE[0] - border, top + height - border),
-        (border, top + height - border),
-    ]
-    draw.polygon(inner, fill=255)
+    _draw_box_border(draw, top, height, fill=255)
+    if weather.get("error"):
+        draw.text((BORDER + 2, top + 4), "WEATHER ERROR", font=small_font, fill=0)
+        draw.text((BORDER + 2, top + 18), weather["error"][:18], font=small_font, fill=0)
+        return
+
     location = weather.get("location", "Outside")
     temp = weather.get("temperature")
     condition = weather.get("condition", "---")
-    draw.text((border + 2, top + 4), location, font=small_font, fill=0)
+    draw.text((BORDER + 2, top + 4), location, font=small_font, fill=0)
     if temp is not None:
         temp_text = f"{temp:.1f}°C"
         text_w, _ = _text_size(temp_text, small_font)
-        draw.text((EPAPER_SIZE[0] - border - text_w - 2, top + 18), temp_text, font=small_font, fill=0)
+        draw.text((EPAPER_SIZE[0] - BORDER - text_w - 2, top + 18), temp_text, font=small_font, fill=0)
     else:
-        draw.text((border + 2, top + 18), "N/A", font=small_font, fill=0)
-    draw.text((border + 2, top + 26), condition, font=tiny_font, fill=0)
+        draw.text((BORDER + 2, top + 18), "N/A", font=small_font, fill=0)
+    draw.text((BORDER + 2, top + 26), condition, font=small_font, fill=0)
 
 
 def draw_sensor_box(draw, top, height, sensor):
-    _draw_box_border(draw, top, height, fill=0)
-    border = 4
-    cut = 10
-    inner = [
-        (border, top + border),
-        (EPAPER_SIZE[0] - border - cut, top + border),
-        (EPAPER_SIZE[0] - border, top + cut + border // 2),
-        (EPAPER_SIZE[0] - border, top + height - border),
-        (border, top + height - border),
-    ]
-    draw.polygon(inner, fill=255)
+    _draw_box_border(draw, top, height, fill=255)
     name = sensor.get("name", "?")
     temp = sensor.get("temp")
     hum = sensor.get("hum")
     bat = sensor.get("bat")
-    draw.text((border + 2, top + 4), name, font=small_font, fill=0)
+    draw.text((BORDER + 2, top + 4), name, font=small_font, fill=0)
     if temp is not None:
-        draw.text((border + 2, top + 16), f"{temp:.1f}°C", font=tiny_font, fill=0)
+        draw.text((BORDER + 2, top + 16), f"{temp:.1f}°C", font=small_font, fill=0)
     if hum is not None:
         hum_text = f"{int(hum)}%"
-        x = EPAPER_SIZE[0] - border - _text_size(hum_text, tiny_font)[0] - 2
-        draw.text((x, top + 16), hum_text, font=tiny_font, fill=0)
+        x = EPAPER_SIZE[0] - BORDER - _text_size(hum_text, small_font)[0] - 2
+        draw.text((x, top + 16), hum_text, font=small_font, fill=0)
     if bat is not None:
         bar_top = top + 28
-        bar_width = EPAPER_SIZE[0] - border * 2
+        bar_width = EPAPER_SIZE[0] - BORDER * 2
         fill_w = int(bar_width * max(0, min(100, float(bat))) / 100)
-        draw.rectangle((border, bar_top, border + fill_w, bar_top + 4), fill=0)
+        draw.rectangle((BORDER, bar_top, BORDER + fill_w, bar_top + 4), fill=0)
 
 
 def build_image(flight, weather, sensors):
     image = Image.new("1", EPAPER_SIZE, 255)
     drawer = ImageDraw.Draw(image)
     time_str = time.strftime("%H:%M")
-    draw_clock_box(drawer, 0, CLOCK_HEIGHT, time_str)
+    date_str = time.strftime("%a, %d.%m.%Y")
+    draw_clock_box(drawer, 0, CLOCK_HEIGHT, time_str, date_str)
     top = CLOCK_HEIGHT + GAP_AFTER_CLOCK
     draw_flight_box(drawer, top, FLIGHT_BOX_HEIGHT, flight)
     top += FLIGHT_BOX_HEIGHT + INTER_BOX_GAP
@@ -197,7 +176,7 @@ def build_image(flight, weather, sensors):
     return image
 
 
-def save_preview(image, name="preview_first.png"):
+def save_preview(image, name="preview.png"):
     os.makedirs(PREVIEW_DIR, exist_ok=True)
     path = os.path.join(PREVIEW_DIR, name)
     image.convert("RGB").save(path)

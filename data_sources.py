@@ -13,7 +13,7 @@ WEATHER_CODES = {
     2: "Partly cloudy",
     3: "Overcast",
     45: "Fog",
-    48: "Depositing rime fog",
+    48: "Freezing fog",
     51: "Drizzle",
     53: "Moderate drizzle",
     55: "Dense drizzle",
@@ -34,28 +34,26 @@ def _fetch_json(url, timeout=10):
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError):
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+        print(f"Failed to fetch JSON from {url}: {exc}")
         return None
 
 
 def get_flight_data():
     url = os.environ.get("FLIGHT_DATA_URL")
-    if url:
-        payload = _fetch_json(url)
-        if isinstance(payload, dict):
-            return {
-                "flight_number": payload.get("flight_number") or payload.get("ident") or "N/A",
-                "dep_city": payload.get("dep_city") or payload.get("departure_city") or "Depart",
-                "dep_country": payload.get("dep_country") or payload.get("departure_country") or "",
-                "arr_city": payload.get("arr_city") or payload.get("arrival_city") or "Arrive",
-                "arr_country": payload.get("arr_country") or payload.get("arrival_country") or "",
-            }
+    if not url:
+        return {"error": "No FLIGHT_DATA_URL set"}
+
+    payload = _fetch_json(url)
+    if not isinstance(payload, dict):
+        return {"error": "Flight data unavailable"}
+
     return {
-        "flight_number": "FIN1KF",
-        "dep_city": "Helsinki",
-        "dep_country": "FI",
-        "arr_city": "Bremen",
-        "arr_country": "DE",
+        "flight_number": payload.get("flight_number") or payload.get("ident") or "N/A",
+        "dep_city": payload.get("dep_city") or payload.get("departure_city") or "Depart",
+        "dep_country": payload.get("dep_country") or payload.get("departure_country") or "",
+        "arr_city": payload.get("arr_city") or payload.get("arrival_city") or "Arrive",
+        "arr_country": payload.get("arr_country") or payload.get("arrival_country") or "",
     }
 
 
@@ -63,17 +61,14 @@ def get_outside_weather(latitude=DEFAULT_LATITUDE, longitude=DEFAULT_LONGITUDE):
     params = "latitude=%s&longitude=%s&current_weather=true&timezone=auto" % (latitude, longitude)
     url = f"{WEATHER_URL}?{params}"
     payload = _fetch_json(url)
-    if payload and payload.get("current_weather"):
-        current = payload["current_weather"]
-        return {
-            "location": "Outside",
-            "temperature": current.get("temperature"),
-            "condition": WEATHER_CODES.get(current.get("weathercode"), "Unknown"),
-        }
+    if not payload or not payload.get("current_weather"):
+        return {"error": "Weather unavailable", "location": "Outside", "temperature": None, "condition": "N/A"}
+
+    current = payload["current_weather"]
     return {
         "location": "Outside",
-        "temperature": 20.1,
-        "condition": "Clear",
+        "temperature": current.get("temperature"),
+        "condition": WEATHER_CODES.get(current.get("weathercode"), "Unknown"),
     }
 
 
