@@ -31,6 +31,6 @@ def run_loop(debug):
 
 
 if __name__ == "__main__":
-    run_loop(debug=True)
+    run_loop(debug=False)
 
 
