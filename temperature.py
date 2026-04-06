@@ -12,7 +12,7 @@ def parse_args(args=None):
     return parser.parse_args(args)
 
 
-def run_loop(debug=False, once=False):
+def run_loop(debug=False):
     try:
         while True:
             departures = get_departures()
@@ -24,15 +24,11 @@ def run_loop(debug=False, once=False):
                 print("Debug mode: exiting after saving preview")
                 break
             send(image)
-            if once:
-                break
             time.sleep(60)
     except KeyboardInterrupt:
         print("Exiting")
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    run_loop(debug=args.debug, once=args.once)
-
+    run_loop(debug=False)
 

@@ -45,7 +45,7 @@ def _fetch_json(url, timeout=10):
         return None
 
 
-def _shorten_destination(dest, max_chars=18):
+def _shorten_destination(dest, max_chars=30):
     if not dest:
         return ""
     for sep in [" via ", " - ", " / ", " ("]:
@@ -63,7 +63,7 @@ def _shorten_destination(dest, max_chars=18):
 
 def _format_departure(departure, station_name=None, station_priority=0):
     line = str(departure.get("label", "?")).strip()
-    destination = _shorten_destination(departure.get("destination", ""), max_chars=18)
+    destination = _shorten_destination(departure.get("destination", ""))
     planned = departure.get("plannedDepartureTime")
     realtime = departure.get("realtimeDepartureTime") or planned
     minutes = "??"
@@ -162,7 +162,6 @@ def get_outside_weather(latitude=DEFAULT_LATITUDE, longitude=DEFAULT_LONGITUDE):
 
     current = payload["current_weather"]
     return {
-        "location": "Outside",
         "temperature": current.get("temperature"),
         "condition": WEATHER_CODES.get(current.get("weathercode"), "Unknown"),
     }
